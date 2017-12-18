@@ -51,11 +51,8 @@ abstract class GenericServer {
 	
 	public shared this(shared ServerInfo info, uint[] protocols, uint[] supported) {
 		this.info = info;
-		sort(protocols);
-		//TODO remove duplicates
-		assert(protocols.length != 0);
-		assert(protocols.all!(a => supported.canFind(a)));
-		this.protocols = protocols.idup;
+		this.protocols = checkProtocols(protocols, supported).idup;
+		assert(this.protocols.length);
 	}
 
 	/**
@@ -108,6 +105,17 @@ class Handler {
 
 	public shared void onClientLeft(shared Client client) {}
 
+}
+
+uint[] checkProtocols(uint[] protocols, uint[] supported) {
+	sort(protocols);
+	uint[] ret;
+	foreach(i, protocol; protocols) {
+		if(supported.canFind(protocol) && (ret.length == 0 || protocol != ret[$-1])) {
+			ret ~= protocol;
+		}
+	}
+	return ret;
 }
 
 template TupleOf(alias array) {

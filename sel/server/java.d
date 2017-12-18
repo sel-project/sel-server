@@ -14,6 +14,8 @@
  */
 module sel.server.java;
 
+debug import core.thread : Thread;
+
 import std.algorithm : canFind, all;
 import std.concurrency : spawn;
 import std.conv : to;
@@ -27,8 +29,8 @@ import sel.server.query : Query;
 import sel.server.util;
 import sel.stream;
 
-//import sul.protocol.minecraft335.status;
-//import sul.protocol.minecraft335.login;
+import sul.protocol.java340.status;
+import sul.protocol.java340.login;
 
 import sul.utils.var : varuint;
 
@@ -43,170 +45,187 @@ public enum string[][uint] javaSupportedProtocols = [
 	340u: ["1.12.2"],
 ];
 
-class JavaServer : GenericServer {}
+abstract class JavaServer : GenericServer {
 
-class JavaServerImpl(uint[] supportedProtocols=javaSupportedProtocols.keys) : GenericServer {
-	
-	public shared this(shared ServerInfo info, uint[] protocols=supportedProtocols) {
+	public shared this(shared ServerInfo info, uint[] protocols, uint[] supportedProtocols) {
 		super(info, protocols, supportedProtocols);
 	}
-	
+
 	public override shared pure nothrow @property @safe @nogc ushort defaultPort() {
 		return ushort(25565);
-	}
-	
-	/**
-	 * Starts the server in a new thread.
-	 */
-	protected override shared void startImpl(Address address, shared Handler handler, shared Query query) {
-		Socket socket = new TcpSocket(address.addressFamily);
-		socket.setOption(SocketOptionLevel.SOCKET, SocketOption.REUSEADDR, true);
-		socket.blocking = true;
-		socket.bind(address);
-		socket.listen(10);
-		spawn(&this.acceptClients, cast(shared)socket, handler);
-		if(query !is null) {
-			Socket qsocket = new UdpSocket(address.addressFamily);
-			qsocket.blocking = true;
-			qsocket.bind(address);
-			spawn(&this.acceptQueries, cast(shared)qsocket, query);
-		}
-	}
-
-	protected shared void acceptQueries(shared Socket _socket, shared Query query) {
-		UdpStream stream = new UdpStream(cast()_socket);
-		Query.Handler handler;
-		with(stream.socket.localAddress) handler = (cast()query).new Handler("MINECRAFT", toAddrString(), to!ushort(toPortString()));
-		Address address;
-		while(true) {
-			ubyte[] buffer = stream.receiveFrom(address);
-			if(buffer.length >= 2 && buffer[0] == 254 && buffer[1] == 253) {
-				auto data = handler.handle(buffer[2..$]);
-				if(data.length) {
-					writeln(cast(string)data);
-					stream.sendTo(data, address);
-				}
-			}
-		}
-	}
-	
-	/**
-	 * Accepts new connection and do the first handle.
-	 */
-	protected shared void acceptClients(shared Socket _socket, shared Handler handler) {
-		Socket socket = cast()_socket;
-		while(true) {
-			//Socket client = socket.accept();
-			spawn(&this.handleNewClient, cast(shared)socket.accept(), handler);
-		}
-	}
-	
-	protected shared void handleNewClient(shared Socket _client, shared Handler handler) {
-		Socket client = cast()_client;
-		client.setOption(SocketOptionLevel.SOCKET, SocketOption.RCVTIMEO, dur!"seconds"(10));
-		ubyte[] buffer = new ubyte[96];
-		auto recv = client.receive(buffer);
-		if(recv > 0) {
-			// valid packet received, handle
-			if(buffer[0] == 254) {
-				//TODO legacy ping
-			} else {
-				// read as a normal minecraft packet
-				immutable length = varuint.fromBuffer(buffer);
-				if(length != 0 && length < recv) {
-					if(varuint.fromBuffer(buffer) == Handshake.ID) {
-						Handshake handshake = Handshake.fromBuffer!false(buffer);
-						auto stream = new LengthPrefixedStream!varuint(new TcpStream(client), buffer.length); // first packets should be pretty small
-						if(handshake.next == Handshake.LOGIN) {
-							// keep this thread for the player's session
-							stream.maxLength = 1024;
-							return this.handleNewPlayer(stream, handshake, handler);
-						} else {
-							// status
-							ubyte[] request = stream.receive();
-							if(request.length == 1 && request[0] == Request.ID) {
-								stream.send(new Response(JSONValue(this.getPingResponse(client, handshake.protocol, handshake.serverAddress, handshake.serverPort)).toString()).encode());
-								// handle optional latency calculation
-								// connection timeout is still set to 8 seconds
-								ubyte[] latency = stream.receive();
-								if(latency.length == 9 && latency[0] == Latency.ID) {
-									// send back the exact same packet
-									stream.send(latency);
-								}
-								// blocking socket should be closed only after sending everything
-							}
-						}
-					}
-				}
-			}
-		}
-		client.close();
-	}
-	
-	/**
-	 * Gets the JSON informations that the client will use to display the server
-	 * in its servers list.
-	 * This method can be overridden by custom implementation of the server.
-	 */
-	protected shared JSONValue[string] getPingResponse(Socket client, uint protocol, string ip, ushort port) {
-		if(!this.protocols.canFind(protocol)) protocol = this.protocols[$-1];
-		JSONValue[string] ret;
-		ret["description"] = this.info.motd;
-		ret["version"] = ["protocol": JSONValue(protocol), "name": JSONValue(supportedProtocols[protocol][0])];
-		ret["players"] = ["online": JSONValue(this.info.online), "max": JSONValue(this.info.max)];
-		//TODO favicon
-		return ret;
-	}
-	
-	/**
-	 * Handles a new player connection after the handshake packet with
-	 * the status set to "login".
-	 * At this state the socket should be blocking with the timeout set to 8 seconds.
-	 */
-	protected shared void handleNewPlayer(Stream stream, Handshake handshake, shared Handler handler) {
-		// receive the login packet
-		ubyte[] loginp = stream.receive();
-		if(varuint.fromBuffer(loginp) == LoginStart.ID) {
-			LoginStart login = LoginStart.fromBuffer!false(loginp);
-			// start compression
-			stream.send(new SetCompression(1024).encode());
-			stream = new CompressedStream!varuint(stream, 1024);
-			// perform validations
-			immutable disconnect = this.validatePlayer(login.username, stream.socket.remoteAddress, handshake.protocol, handshake.serverAddress, handshake.serverPort);
-			if(disconnect.length) {
-				stream.send(new Disconnect(JSONValue(["text": disconnect]).toString()).encode());
-				stream.socket.close();
-			} else {
-				// send a login success
-				//TODO encryption
-				UUID uuid = randomUUID();
-				stream.send(new LoginSuccess(uuid.toString(), login.username).encode());
-				// start real session
-				shared JavaClient session = (){
-					final switch(handshake.protocol) {
-						foreach(protocol ; TupleOf!(supportedProtocols.keys)) {
-							case protocol:
-								return cast(shared JavaClient)new shared JavaClientOf!protocol(stream, login.username, uuid);
-						}
-					}
-				}();
-				handler.onClientJoin(session);
-				session.start(this); // blocking operation, returns when the session is closed
-				handler.onClientLeft(session);
-			}
-		}
-	}
-	
-	protected shared string validatePlayer(string username, Address address, uint protocol, string usedIp, ushort usedPort) {
-		if(!this.protocols.canFind(protocol)) return protocol > this.protocols[$-1] ? "Outdated Server!" : "Outdated Client!";
-		if(username.length < 3 || username.length > 16 || !username.all!(a => a >= '0' && a <= '9' || a >= 'A' && a <= 'Z' || a >= 'a' && a <= 'z' || a == '_')) return "Invalid Username";
-		return "";
 	}
 	
 	protected shared void onLatencyUpdated(shared JavaClient session, ulong latency) {}
 	
 	protected shared void onPacketReceived(shared JavaClient session, ubyte[] packet) {}
+
+}
+
+alias JavaServerImpl(string[][uint] supportedProtocols) = JavaServerImpl!(supportedProtocols.keys);
+
+template JavaServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSupportedProtocols, javaSupportedProtocols.keys).length) {
+
+	enum supportedProtocols = checkProtocols(rawSupportedProtocols, javaSupportedProtocols.keys);
+
+	class JavaServerImpl : JavaServer {
 	
+		public shared this(shared ServerInfo info, uint[] protocols=supportedProtocols) {
+			super(info, protocols, supportedProtocols);
+		}
+		
+		/**
+		 * Starts the server in a new thread.
+		 */
+		protected override shared void startImpl(Address address, shared Handler handler, shared Query query) {
+			Socket socket = new TcpSocket(address.addressFamily);
+			socket.setOption(SocketOptionLevel.SOCKET, SocketOption.REUSEADDR, true);
+			socket.blocking = true;
+			socket.bind(address);
+			socket.listen(10);
+			spawn(&this.acceptClients, cast(shared)socket, handler);
+			if(query !is null) {
+				Socket qsocket = new UdpSocket(address.addressFamily);
+				qsocket.blocking = true;
+				qsocket.bind(address);
+				spawn(&this.acceptQueries, cast(shared)qsocket, query);
+			}
+		}
+
+		protected shared void acceptQueries(shared Socket _socket, shared Query query) {
+			debug Thread.getThis().name = "java_server.accept_queries";
+			UdpStream stream = new UdpStream(cast()_socket);
+			Query.Handler handler;
+			with(stream.socket.localAddress) handler = (cast()query).new Handler("MINECRAFT", toAddrString(), to!ushort(toPortString()));
+			Address address;
+			while(true) {
+				ubyte[] buffer = stream.receiveFrom(address);
+				if(buffer.length >= 2 && buffer[0] == 254 && buffer[1] == 253) {
+					auto data = handler.handle(buffer[2..$]);
+					if(data.length) {
+						writeln(cast(string)data);
+						stream.sendTo(data, address);
+					}
+				}
+			}
+		}
+		
+		/**
+		 * Accepts new connection and do the first handle.
+		 */
+		protected shared void acceptClients(shared Socket _socket, shared Handler handler) {
+			debug Thread.getThis().name = "java_server.accept_clients";
+			Socket socket = cast()_socket;
+			while(true) {
+				//Socket client = socket.accept();
+				spawn(&this.handleNewClient, cast(shared)socket.accept(), handler);
+			}
+		}
+		
+		protected shared void handleNewClient(shared Socket _client, shared Handler handler) {
+			debug Thread.getThis().name = "java_client.session";
+			Socket client = cast()_client;
+			client.setOption(SocketOptionLevel.SOCKET, SocketOption.RCVTIMEO, dur!"seconds"(10));
+			ubyte[] buffer = new ubyte[96];
+			auto recv = client.receive(buffer);
+			if(recv > 0) {
+				// valid packet received, handle
+				if(buffer[0] == 254) {
+					//TODO legacy ping
+				} else {
+					// read as a normal minecraft packet
+					immutable length = varuint.fromBuffer(buffer);
+					if(length != 0 && length < recv) {
+						if(varuint.fromBuffer(buffer) == Handshake.ID) {
+							Handshake handshake = Handshake.fromBuffer!false(buffer);
+							auto stream = new LengthPrefixedStream!varuint(new TcpStream(client), buffer.length); // first packets should be pretty small
+							if(handshake.next == Handshake.LOGIN) {
+								// keep this thread for the player's session
+								stream.maxLength = 1024;
+								return this.handleNewPlayer(stream, handshake, handler);
+							} else {
+								// status
+								ubyte[] request = stream.receive();
+								if(request.length == 1 && request[0] == Request.ID) {
+									stream.send(new Response(JSONValue(this.getPingResponse(client, handshake.protocol, handshake.serverAddress, handshake.serverPort)).toString()).encode());
+									// handle optional latency calculation
+									// connection timeout is still set to 8 seconds
+									ubyte[] latency = stream.receive();
+									if(latency.length == 9 && latency[0] == Latency.ID) {
+										// send back the exact same packet
+										stream.send(latency);
+									}
+									// blocking socket should be closed only after sending everything
+								}
+							}
+						}
+					}
+				}
+			}
+			client.close();
+		}
+		
+		/**
+		 * Gets the JSON informations that the client will use to display the server
+		 * in its servers list.
+		 * This method can be overridden by custom implementation of the server.
+		 */
+		protected shared JSONValue[string] getPingResponse(Socket client, uint protocol, string ip, ushort port) {
+			if(!this.protocols.canFind(protocol)) protocol = this.protocols[$-1];
+			JSONValue[string] ret;
+			ret["description"] = this.info.motd;
+			ret["version"] = ["protocol": JSONValue(protocol), "name": JSONValue(javaSupportedProtocols[protocol][0])];
+			ret["players"] = ["online": JSONValue(this.info.online), "max": JSONValue(this.info.max)];
+			if(this.info.favicon.length) ret["favicon"] = this.info.favicon;
+			return ret;
+		}
+		
+		/**
+		 * Handles a new player connection after the handshake packet with
+		 * the status set to "login".
+		 * At this state the socket should be blocking with the timeout set to 8 seconds.
+		 */
+		protected shared void handleNewPlayer(Stream stream, Handshake handshake, shared Handler handler) {
+			// receive the login packet
+			ubyte[] loginp = stream.receive();
+			if(varuint.fromBuffer(loginp) == LoginStart.ID) {
+				LoginStart login = LoginStart.fromBuffer!false(loginp);
+				// start compression
+				stream.send(new SetCompression(1024).encode());
+				stream = new CompressedStream!varuint(stream, 1024);
+				// perform validations
+				immutable disconnect = this.validatePlayer(login.username, stream.socket.remoteAddress, handshake.protocol, handshake.serverAddress, handshake.serverPort);
+				if(disconnect.length) {
+					stream.send(new Disconnect(JSONValue(["text": disconnect]).toString()).encode());
+					stream.socket.close();
+				} else {
+					// send a login success
+					//TODO encryption
+					UUID uuid = randomUUID();
+					stream.send(new LoginSuccess(uuid.toString(), login.username).encode());
+					// start real session
+					shared JavaClient session = (){
+						final switch(handshake.protocol) {
+							foreach(protocol ; TupleOf!supportedProtocols) {
+								case protocol:
+									return cast(shared JavaClient)new shared JavaClientOf!protocol(stream, login.username, uuid);
+							}
+						}
+					}();
+					handler.onClientJoin(session);
+					session.start(this); // blocking operation, returns when the session is closed
+					handler.onClientLeft(session);
+				}
+			}
+		}
+		
+		protected shared string validatePlayer(string username, Address address, uint protocol, string usedIp, ushort usedPort) {
+			if(!this.protocols.canFind(protocol)) return protocol > this.protocols[$-1] ? "Outdated Server!" : "Outdated Client!";
+			if(username.length < 3 || username.length > 16 || !username.all!(a => a >= '0' && a <= '9' || a >= 'A' && a <= 'Z' || a >= 'a' && a <= 'z' || a == '_')) return "Invalid Username";
+			return "";
+		}
+		
+	}
+
 }
 
 abstract class JavaClient : Client {
@@ -262,19 +281,19 @@ abstract class JavaClient : Client {
 	}
 	
 	protected abstract shared ubyte[] createDisconnect(string json);
-
+	
 	/**
-	 * Sends a game packet to the client.
-	 */
+		 * Sends a game packet to the client.
+		 */
 	public override shared void send(ubyte[] packet) {
 		//TODO do compression in another thread but maintain packet order
 		(cast()this.stream).send(packet);
 	}
-
+	
 	/**
-	 * Sends a raw packet, without performing eventual compression
-	 * or 0-padding.
-	 */
+		 * Sends a raw packet, without performing eventual compression
+		 * or 0-padding.
+		 */
 	public override shared void directSend(ubyte[] payload) {
 		(cast(ModifierStream)this.stream).stream.send(payload); // length is still appended
 	}
@@ -302,4 +321,10 @@ class JavaClientOf(uint __protocol) : JavaClient {
 		return new ClientboundDisconnect(json).encode();
 	}
 	
+}
+
+unittest {
+
+	alias Server = JavaServerImpl!javaSupportedProtocols;
+
 }
