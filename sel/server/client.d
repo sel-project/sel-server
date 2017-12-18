@@ -59,7 +59,7 @@ class Client {
 		this._address = cast(shared)address;
 		this._username = username;
 		this._uuid = cast(shared)uuid;
-		this.handler = delegate(ubyte[]) shared {};
+		//TODO set handler
 	}
 
 	/**

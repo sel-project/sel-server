@@ -21,7 +21,8 @@ import std.base64 : Base64, Base64Impl, Base64Exception;
 import std.bitmanip : peek;
 import std.concurrency : spawn, Tid, sendc = send, receiveTimeout, receiveOnly;
 import std.conv : to;
-import std.datetime : StopWatch, dur;
+import std.datetime : dur;
+import std.datetime.stopwatch : StopWatch;
 import std.json : JSONValue, JSON_TYPE, parseJSON, JSONException;
 import std.socket : Address, AddressFamily, InternetAddress, Internet6Address, Socket, UdpSocket, SocketOptionLevel, SocketOption;
 import std.string : indexOf, lastIndexOf;
@@ -249,35 +250,19 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) /*if(checkProtocols(raw
 		private shared void handleLogin(ubyte[] buffer) {
 			switch(buffer[0]) {
 				case 254:
-					// 0.15, 1.0, 1.1 (container)
+					// 0.15, 1.0, 1.1, 1.2 (container)
 					if(buffer.length > 6) {
 						this.handleFunction = &this.handleNothing; // avoid handling the login more than once
 						if(buffer[1] == 0x78) {
-							// compressed (1.1)
+							// compressed (1.1, 1.2)
 							// uncompress
 							// do protocol controls
 							// handle non-compressed login body
 							spawn(&this.handleCompressedBody, buffer[1..$].idup, false);
 							break;
-						} else if(buffer[1] == 1) {
-							// login packet (1.0)
-							// do protocol controls
-							// handle compressed login packet in new thread
-							immutable protocol = this.validateProtocol(buffer[2..6]);
-							if(protocol != 0) {
-								spawn(&this.handleLoginBody, protocol, buffer[6..$].idup, true);
-								break;
-							}
-						} else if(buffer[1] == 6) {
-							// batch packet (1.0)
-							// uncompressed batch body's in new thread
-							// do protocol controls
-							// handle compressed login packet's body
-							buffer = buffer[2..$];
-							if(varuint.fromBuffer(buffer) == buffer.length) {
-								spawn(&this.handleCompressedBody, buffer.idup, true);
-								break;
-							}
+						} else if(buffer[1] == 1 || buffer[1] == 6) {
+							// login or batch packet (1.0)
+							(cast()this.stream).send(cast(ubyte[])[254, 2, 0, 0, 0, 1]);
 						}
 					}
 					this.close();
@@ -307,6 +292,7 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) /*if(checkProtocols(raw
 		}
 		
 		private shared void handleCompressedBody(immutable(ubyte)[] payload, bool bodyCompressed) {
+			debug Thread.getThis().name = "bedrock_client@?";
 			ubyte[][] packets;
 			try {
 				packets = uncompressPackets(payload);
@@ -319,8 +305,11 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) /*if(checkProtocols(raw
 				immutable protocol = this.validateProtocol(login[1..5]);
 				if(protocol != 0) {
 					this.handleLoginBody(protocol, login[5..$].idup, bodyCompressed);
+					return;
 				}
 			}
+			// wrong packet or wrong protocol
+			this.close();
 		}
 		
 		private shared void handleLoginBody(uint protocol, immutable(ubyte)[] _payload, bool compressed) {
@@ -381,7 +370,7 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) /*if(checkProtocols(raw
 											final switch(protocol) {
 												foreach(p ; TupleOf!supportedProtocols) {
 													case p:
-													return cast(shared BedrockClient)new shared BedrockClientOf!p(this, displayName.str, uuid);
+													return cast(shared BedrockClient)new shared BedrockClientOf!p(this, protocol, displayName.str, uuid);
 												}
 											}
 										}();
@@ -414,19 +403,16 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) /*if(checkProtocols(raw
 		 */
 		private shared uint validateProtocol(ubyte[] data) {
 			uint protocol = peek!uint(data, 0);
-			ubyte[] packet = cast(ubyte[])[2, 0, 0, 0, 0];
+			ubyte[] packet = cast(ubyte[])[2, 0, 0, 0, 0, 0, 0]; // id (byte), padding (byte[2]), code (int)
 			if(!this.protocols.canFind(protocol)) {
 				if(protocol > this.protocols[$-1]) packet[$-1] = 2; // outdated server
 				else packet[$-1] = 1; // outdated client
-				this.close();
+				//this.close();
 				protocol = 0;
 			}
-			if(protocol >= 110) {
-				// compress everything!
-				Compress compress = new Compress(1);
-				packet = cast(ubyte[])compress.compress(varuint.encode(5u) ~ packet);
-				packet ~= cast(ubyte[])compress.flush();
-			}
+			// compress everything! (since protocol 110)
+			Compress compress = new Compress(1);
+			packet = cast(ubyte[])compress.compress(varuint.encode(packet.length.to!uint) ~ packet);
 			(cast()this.stream).send(ubyte(254) ~ packet);
 			return protocol;
 		}
@@ -570,8 +556,10 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) /*if(checkProtocols(raw
 			ubyte[][] compressed = new ubyte[][1];
 			size_t length = 0;
 			foreach(packet ; packets) {
-				compressed[$-1] ~= varuint.encode(packet.length.to!uint);
-				compressed[$-1] ~= packet;
+				compressed[$-1] ~= varuint.encode(packet.length.to!uint + 2); // 2 bytes of padding
+				compressed[$-1] ~= packet[0];
+				compressed[$-1] ~= [ubyte(0), ubyte(0)]; // 2-bytes padding
+				compressed[$-1] ~= packet[1..$];
 				if((length += packet.length) > 500_000) {
 					// do not compress more than 500 MB
 					compressed.length++;
@@ -584,42 +572,6 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) /*if(checkProtocols(raw
 				buffer ~= cast(ubyte[])compress.flush();
 			}
 			return compressed;
-		}
-		
-	}
-
-	class OldBedrockClient : BedrockClient {
-		
-		public shared this(uint protocol, shared RaknetSession session, string username, UUID uuid) {
-			super(protocol, session, username, uuid);
-		}
-		
-		protected abstract shared pure nothrow @property @safe @nogc ubyte batchId();
-		
-		public override shared void handle(ubyte[] buffer) {
-			if(buffer[0] == this.batchId) {
-				buffer = buffer[1..$];
-				if(varuint.fromBuffer(buffer) == buffer.length) {
-					// uncompress the body of the batch packet
-					super.handle(buffer);
-				}
-			} else {
-				// handle packet
-				sendc(cast()this.raknetSession.handlerThread, cast(shared Client)this, buffer.idup);
-			}
-		}
-		
-		protected override shared void sendData(ubyte[][] packets) {
-			if(packets.length > 8 || totalLength(packets) > 1024) {
-				foreach(data ; this.compressPackets(packets)) {
-					data = this.batchId ~ varuint.encode(data.length.to!uint) ~ data;
-					(cast()this.raknetSession.stream).send(ubyte(254) ~ data);
-				}
-			} else {
-				foreach(packet ; packets) {
-					(cast()this.raknetSession.stream).send(ubyte(254) ~ packet);
-				}
-			}
 		}
 		
 	}
@@ -641,13 +593,10 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) /*if(checkProtocols(raw
 			
 			mixin("import Play = sul.protocol.bedrock" ~ __protocol.to!string ~ ".play;");
 			
-			static if(__protocol < 110) alias Session = OldBedrockClient;
-			else alias Session = BedrockClient;
-			
-			class BedrockClientOf : Session {
+			class BedrockClientOf : BedrockClient {
 				
-				public shared this(shared RaknetSession session, string username, UUID uuid) {
-					super(__protocol, session, username, uuid);
+				public shared this(shared RaknetSession session, uint protocol, string username, UUID uuid) {
+					super(protocol, session, username, uuid);
 				}
 				
 				public override shared ubyte[] createDisconnect(string message) {
@@ -688,8 +637,10 @@ private ubyte[][] uncompressPackets(inout(ubyte)[] payload) {
 	data ~= cast(ubyte[])uc.flush();
 	ubyte[][] packets;
 	size_t index, length;
-	while((length = varuint.decode(data, &index)) != 0 && length <= data.length - index) {
-		packets ~= data[index..index+=length];
+	while((length = varuint.decode(data, &index)) >= 3 && length <= data.length - index) {
+		// packets have a 2-bytes padding after the id
+		packets ~= (data[index..index+1] ~ data[index+3..index+length]);
+		index += length;
 	}
 	return packets;
 }

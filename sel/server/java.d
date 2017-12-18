@@ -19,7 +19,8 @@ debug import core.thread : Thread;
 import std.algorithm : canFind, all;
 import std.concurrency : spawn;
 import std.conv : to;
-import std.datetime : StopWatch, dur;
+import std.datetime : dur, usecs;
+import std.datetime.stopwatch : StopWatch;
 import std.json : JSONValue;
 import std.socket : Address, Socket, TcpSocket, UdpSocket, SocketOptionLevel, SocketOption;
 import std.uuid : UUID, randomUUID;
@@ -251,7 +252,7 @@ abstract class JavaClient : Client {
 			ubyte[] recv = stream.receive();
 			if(recv.length) {
 				if(varuint.decode(recv, 0) == this.keepAliveId) {
-					server.onLatencyUpdated(this, timer.peek.msecs);
+					server.onLatencyUpdated(this, timer.peek().split!"msecs"().msecs);
 				} else {
 					server.onPacketReceived(this, recv);
 				}
@@ -262,7 +263,7 @@ abstract class JavaClient : Client {
 				break;
 			}
 			// check whether to send keep alive
-			if(timer.peek.usecs > 15_000_000) {
+			if(timer.peek() > usecs(15_000_000)) {
 				timeout = 0;
 				timer.reset();
 				stream.send(this.createKeepAlive(++nextKeepAlive));

@@ -17,7 +17,7 @@ module sel.server.query;
 import std.array : Appender;
 import std.bitmanip : nativeToLittleEndian;
 import std.conv : to;
-import std.datetime :  StopWatch;
+import std.datetime.stopwatch : StopWatch;
 import std.string : join;
 
 import sel.server.util;
@@ -69,7 +69,7 @@ class Query {
 					}
 				} else if(payload[0] == 9) {
 					// login
-					if(this.sessionTimer.peek.msecs > 30_000) {
+					if(this.sessionTimer.peek().split!"msecs"().msecs > 30_000) {
 						this.sessions.clear();
 						this.sessionTimer.reset();
 					}
@@ -149,7 +149,7 @@ private auto createAppender() {
 private string createHandler(string type, uint time) {
 	import std.string : capitalize;
 	return "
-		immutable peek = this." ~ type ~ "Timer.peek.msecs;
+		immutable peek = this." ~ type ~ "Timer.peek().split!`msecs`().msecs;
 		if(peek > this.last" ~ capitalize(type) ~ " + " ~ to!string(time) ~ ") {
 			this.regenerate" ~ capitalize(type) ~ "Query();
 			this.last" ~ capitalize(type) ~ " = peek;
