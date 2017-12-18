@@ -31,10 +31,10 @@ import std.typecons : Tuple;
 import std.uuid : UUID, parseUUID, UUIDParsingException;
 import std.zlib : Compress, UnCompress, ZlibException;
 
+import sel.net.stream : UdpStream, RaknetStream;
 import sel.server.client : Client, InputMode;
 import sel.server.query : Query;
 import sel.server.util;
-import sel.stream;
 
 import sul.protocol.raknet8.encapsulated : ClientConnect, ServerHandshake, ClientHandshake, ClientCancelConnection, ConnectedPing = Ping, ConnectedPong = Pong;
 import sul.protocol.raknet8.types : RaknetAddress = Address;
@@ -258,7 +258,7 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) /*if(checkProtocols(raw
 							// uncompress
 							// do protocol controls
 							// handle non-compressed login body
-							spawn(&this.handleCompressedBody, buffer[1..$].idup, false);
+							spawn(&this.handleCompressedBody, buffer[1..$].idup);
 							break;
 						} else if(buffer[1] == 1 || buffer[1] == 6) {
 							// login or batch packet (1.0)
@@ -291,7 +291,7 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) /*if(checkProtocols(raw
 			}
 		}
 		
-		private shared void handleCompressedBody(immutable(ubyte)[] payload, bool bodyCompressed) {
+		private shared void handleCompressedBody(immutable(ubyte)[] payload) {
 			debug Thread.getThis().name = "bedrock_client@?";
 			ubyte[][] packets;
 			try {
@@ -304,7 +304,7 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) /*if(checkProtocols(raw
 				ubyte[] login = packets[0];
 				immutable protocol = this.validateProtocol(login[1..5]);
 				if(protocol != 0) {
-					this.handleLoginBody(protocol, login[5..$].idup, bodyCompressed);
+					this.handleLoginBody(protocol, login[5..$].idup);
 					return;
 				}
 			}
@@ -312,7 +312,7 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) /*if(checkProtocols(raw
 			this.close();
 		}
 		
-		private shared void handleLoginBody(uint protocol, immutable(ubyte)[] _payload, bool compressed) {
+		private shared void handleLoginBody(uint protocol, immutable(ubyte)[] _payload) {
 			ubyte[] payload = _payload.dup;
 			immutable edition = (){
 				if(protocol < 8 || protocol >= 120) {
@@ -325,16 +325,6 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) /*if(checkProtocols(raw
 				}
 			}();
 			if(varuint.fromBuffer(payload) == payload.length && payload.length) {
-				if(compressed) {
-					try {
-						UnCompress uc = new UnCompress();
-						payload = cast(ubyte[])uc.uncompress(payload);
-						payload ~= cast(ubyte[])uc.flush();
-					} catch(ZlibException) {
-						this.close();
-						return;
-					}
-				}
 				size_t index = 0;
 				string readBody() {
 					if(index + 4 < payload.length) {

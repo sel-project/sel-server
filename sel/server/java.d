@@ -25,10 +25,11 @@ import std.json : JSONValue;
 import std.socket : Address, Socket, TcpSocket, UdpSocket, SocketOptionLevel, SocketOption;
 import std.uuid : UUID, randomUUID;
 
+import sel.net.modifiers : ModifierStream, LengthPrefixedStream, CompressedStream;
+import sel.net.stream : Stream, TcpStream, UdpStream;
 import sel.server.client : Client;
 import sel.server.query : Query;
 import sel.server.util;
-import sel.stream;
 
 import sul.protocol.java340.status;
 import sul.protocol.java340.login;
