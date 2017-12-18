@@ -91,8 +91,12 @@ template JavaServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSuppo
 			}
 		}
 
+		/**
+		 * Starts an UDP socket that is only used for the external
+		 * query protocol.
+		 */
 		protected shared void acceptQueries(shared Socket _socket, shared Query query) {
-			debug Thread.getThis().name = "java_server.accept_queries";
+			debug Thread.getThis().name = "java_server@" ~ (cast()_socket).localAddress.toString() ~ "/accept_queries";
 			UdpStream stream = new UdpStream(cast()_socket);
 			Query.Handler handler;
 			with(stream.socket.localAddress) handler = (cast()query).new Handler("MINECRAFT", toAddrString(), to!ushort(toPortString()));
@@ -102,7 +106,7 @@ template JavaServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSuppo
 				if(buffer.length >= 2 && buffer[0] == 254 && buffer[1] == 253) {
 					auto data = handler.handle(buffer[2..$]);
 					if(data.length) {
-						writeln(cast(string)data);
+						debug writeln(cast(string)data);
 						stream.sendTo(data, address);
 					}
 				}
@@ -110,10 +114,10 @@ template JavaServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSuppo
 		}
 		
 		/**
-		 * Accepts new connection and do the first handle.
+		 * Accepts new connection and handle in a new thread.
 		 */
 		protected shared void acceptClients(shared Socket _socket, shared Handler handler) {
-			debug Thread.getThis().name = "java_server.accept_clients";
+			debug Thread.getThis().name = "java_server@" ~ (cast()_socket).localAddress.toString() ~ "/accept_clients";
 			Socket socket = cast()_socket;
 			while(true) {
 				//Socket client = socket.accept();
@@ -122,9 +126,9 @@ template JavaServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSuppo
 		}
 		
 		protected shared void handleNewClient(shared Socket _client, shared Handler handler) {
-			debug Thread.getThis().name = "java_client.session";
 			Socket client = cast()_client;
-			client.setOption(SocketOptionLevel.SOCKET, SocketOption.RCVTIMEO, dur!"seconds"(10));
+			debug Thread.getThis().name = "java_client@" ~ client.remoteAddress.toString() ~ "/handle";
+			client.setOption(SocketOptionLevel.SOCKET, SocketOption.RCVTIMEO, dur!"seconds"(8));
 			ubyte[] buffer = new ubyte[96];
 			auto recv = client.receive(buffer);
 			if(recv > 0) {
@@ -132,7 +136,7 @@ template JavaServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSuppo
 				if(buffer[0] == 254) {
 					//TODO legacy ping
 				} else {
-					// read as a normal minecraft packet
+					// read as a normal minecraft packet (length, id, payload)
 					immutable length = varuint.fromBuffer(buffer);
 					if(length != 0 && length < recv) {
 						if(varuint.fromBuffer(buffer) == Handshake.ID) {
@@ -141,7 +145,7 @@ template JavaServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSuppo
 							if(handshake.next == Handshake.LOGIN) {
 								// keep this thread for the player's session
 								stream.maxLength = 1024;
-								return this.handleNewPlayer(stream, handshake, handler);
+								this.handleNewPlayer(stream, handshake, handler);
 							} else {
 								// status
 								ubyte[] request = stream.receive();
@@ -196,7 +200,7 @@ template JavaServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSuppo
 				immutable disconnect = this.validatePlayer(login.username, stream.socket.remoteAddress, handshake.protocol, handshake.serverAddress, handshake.serverPort);
 				if(disconnect.length) {
 					stream.send(new Disconnect(JSONValue(["text": disconnect]).toString()).encode());
-					stream.socket.close();
+					//stream.socket.close();
 				} else {
 					// send a login success
 					//TODO encryption
@@ -276,24 +280,23 @@ abstract class JavaClient : Client {
 		Stream stream = cast()this.stream;
 		stream.send(this.createDisconnect(JSONValue([(translation ? "translate" : "text"): message]).toString()));
 		stream.socket.close();
-		//TODO kill session's thread
-		// or just let the client close the session
+		// let the client close the session when the packet has been received
 	}
 	
 	protected abstract shared ubyte[] createDisconnect(string json);
 	
 	/**
-		 * Sends a game packet to the client.
-		 */
+	 * Sends a game packet to the client.
+	 */
 	public override shared void send(ubyte[] packet) {
 		//TODO do compression in another thread but maintain packet order
 		(cast()this.stream).send(packet);
 	}
 	
 	/**
-		 * Sends a raw packet, without performing eventual compression
-		 * or 0-padding.
-		 */
+	 * Sends a raw packet, without performing eventual compression
+	 * or 0-padding.
+	 */
 	public override shared void directSend(ubyte[] payload) {
 		(cast(ModifierStream)this.stream).stream.send(payload); // length is still appended
 	}

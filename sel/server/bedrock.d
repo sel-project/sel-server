@@ -81,7 +81,7 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) /*if(checkProtocols(raw
 			socket.bind(address);
 			auto shared_socket = cast(shared)socket;
 			if(address.addressFamily == AddressFamily.INET) {
-				new Thread({ try { this.receivePackets!true(shared_socket, handler, query); } catch(Throwable t){writeln(t);}}).start();
+				new Thread({ try { this.receivePackets!true(shared_socket, handler, query); } catch(Throwable t){ debug{writeln(t);} }}).start();
 			} else {
 				assert(0, "Unsupported address family: " ~ address.addressFamily.to!string);
 			}
@@ -161,7 +161,7 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) /*if(checkProtocols(raw
 					auto data = receiveOnly!(shared Client, immutable(ubyte)[])();
 					data[0].handler(data[1].dup);
 				} catch(Throwable t) {
-					writeln(t);
+					debug writeln(t);
 				}
 			}
 		}
@@ -173,7 +173,7 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) /*if(checkProtocols(raw
 					auto client = receiveOnly!(shared BedrockClient)();
 					client.startThreads();
 				} catch(Throwable t) {
-					writeln(t);
+					debug writeln(t);
 				}
 			}
 		}
