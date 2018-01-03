@@ -49,7 +49,7 @@ public enum string[][uint] bedrockSupportedProtocols = [
 	137u: ["1.2.0", "1.2.1", "1.2.2", "1.2.3"],
 	141u: ["1.2.5"],
 	150u: ["1.2.6"],
-	160u: ["1.2.7"],
+	160u: ["1.2.7", "1.2.8"],
 ];
 
 abstract class BedrockServer : GenericServer {
@@ -66,7 +66,7 @@ abstract class BedrockServer : GenericServer {
 
 alias BedrockServerImpl(string[][uint] supportedProtocols) = BedrockServerImpl!(supportedProtocols.keys);
 
-template BedrockServerImpl(uint[] rawSupportedProtocols) /*if(checkProtocols(rawSupportedProtocols, bedrockSupportedProtocols.keys).length)*/ {
+template BedrockServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSupportedProtocols, bedrockSupportedProtocols.keys).length) {
 
 	enum supportedProtocols = checkProtocols(rawSupportedProtocols, bedrockSupportedProtocols.keys);
 
