@@ -52,10 +52,10 @@ public enum string[][uint] bedrockSupportedProtocols = [
 	160u: ["1.2.7", "1.2.8"],
 ];
 
-abstract class BedrockServer : GenericServer {
+abstract class BedrockServer : GenericGameServer {
 
-	public shared this(shared ServerInfo info, uint[] protocols, uint[] supportedProtocols) {
-		super(info, protocols, supportedProtocols);
+	public shared this(shared ServerInfo info, uint[] protocols, uint[] supportedProtocols, shared Handler handler) {
+		super(info, protocols, supportedProtocols, handler);
 	}
 	
 	public override shared pure nothrow @property @safe @nogc ushort defaultPort() {
@@ -72,11 +72,15 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSu
 
 	class BedrockServerImpl : BedrockServer {
 	
-		public shared this(shared ServerInfo info, uint[] protocols=supportedProtocols) {
-			super(info, protocols, supportedProtocols);
+		public shared this(shared ServerInfo info, uint[] protocols=supportedProtocols, shared Handler handler=new shared Handler()) {
+			super(info, protocols, supportedProtocols, handler);
 		}
 		
-		protected override shared void startImpl(Address address, shared Handler handler, shared Query query) {
+		public shared this(shared ServerInfo info, shared Handler handler, uint[] protocols=supportedProtocols) {
+			this(info, protocols, handler);
+		}
+		
+		protected override shared void startImpl(Address address, shared Query query) {
 			Socket socket = new UdpSocket(address.addressFamily);
 			socket.blocking = true;
 			socket.bind(address);
@@ -123,7 +127,7 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSu
 						switch(buffer[0]) {
 							case Ping.ID:
 								Ping ping = Ping.fromBuffer(buffer);
-								stream.sendTo(new Pong(ping.pingId, 0, __magic, "MCPE;" ~ this.info.motd ~ ";" ~ protocolsString ~ ";" ~ to!string(this.info.online) ~ ";" ~ to!string(this.info.max)).encode(), address);
+								stream.sendTo(new Pong(ping.pingId, 0, __magic, "MCPE;" ~ this.info.motd.bedrock ~ ";" ~ protocolsString ~ ";" ~ to!string(this.info.online) ~ ";" ~ to!string(this.info.max)).encode(), address);
 								break;
 							case OpenConnectionRequest1.ID:
 								auto packet = OpenConnectionRequest1.fromBuffer(buffer);
@@ -499,17 +503,6 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSu
 		}
 		
 		/**
-		 * Sends a disconnection message to the client and closes
-		 * the session.
-		 */
-		public shared void disconnect(string message) {
-			this.send(this.createDisconnect(message));
-			this.raknetSession.close();
-		}
-		
-		protected abstract shared ubyte[] createDisconnect(string message);
-		
-		/**
 		 * Sends a game packet to the client.
 		 */
 		public override shared synchronized void send(ubyte[] packet) {
@@ -522,6 +515,13 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSu
 			// assuming that the content has already been compressed
 			(cast()this.raknetSession.stream).send(ubyte(254) ~ payload);
 		}
+
+		public override shared void disconnectImpl(string message, bool translation) {
+			this.send(this.createDisconnect(message));
+			this.raknetSession.close();
+		}
+		
+		protected abstract shared ubyte[] createDisconnect(string message);
 		
 		private shared void startCompression() {
 			while(true) {

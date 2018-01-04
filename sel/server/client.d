@@ -14,6 +14,8 @@
  */
 module sel.server.client;
 
+import core.atomic : atomicOp;
+
 import std.socket : Address;
 import std.uuid : UUID;
 
@@ -44,6 +46,8 @@ class Client {
 
 	public string skinName;
 	public ubyte[] skinData;
+	//TODO skin geometry
+	//TODO skin cape
 	public string gameVersion;
 	public long deviceOS;
 	public string deviceModel;
@@ -53,8 +57,7 @@ class Client {
 	public void delegate(ubyte[]) handler;
 
 	public shared this(uint protocol, Address address, string username, UUID uuid) {
-		this.id = _id;
-		_id = _id + 1;
+		this.id = atomicOp!"+="(_id, 1);
 		this.protocol = protocol;
 		this._address = cast(shared)address;
 		this._username = username;
@@ -93,6 +96,12 @@ class Client {
 	public abstract shared synchronized void send(ubyte[] packet);
 
 	public abstract shared synchronized void directSend(ubyte[] payload);
+
+	public final shared void disconnect(string message, bool translation=false) {
+		this.disconnectImpl(message, translation);
+	}
+
+	protected abstract shared void disconnectImpl(string message, bool translation);
 
 	public shared string toString() {
 		return "Client(" ~ this.username ~ ", " ~ this.uuid.toString() ~ ")";

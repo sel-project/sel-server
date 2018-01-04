@@ -14,6 +14,8 @@
  */
 module sel.server.util;
 
+import core.atomic : atomicOp;
+
 import std.algorithm : sort, all, canFind;
 import std.conv : to;
 import std.socket : Address, getAddress;
@@ -27,8 +29,29 @@ import sel.server.query : Query;
  * game's server list and in the queries.
  */
 class ServerInfo {
+
+	static struct MOTD {
+
+		string raw;
+
+		string bedrock, java;
+
+		this(string motd) {
+			this.opAssign(motd);
+		}
+
+		void opAssign(string motd) {
+			this.raw = motd; //TODO remove formatting
+			this.bedrock = this.java = motd;
+		}
+
+		shared void opAssign(string motd) {
+			(cast()this).opAssign(motd);
+		}
+
+	}
 	
-	public string motd = "A Minecraft Server";
+	public MOTD motd = MOTD("A Minecraft Server");
 	
 	public int online = 0;
 	public int max = 32;
@@ -40,62 +63,68 @@ class ServerInfo {
 	
 }
 
-/**
- * A generic server that only contains a ServerInfo, the supported protocols
- * and the mothods to start it.
- */
 abstract class GenericServer {
 
 	protected shared ServerInfo info;
-	public immutable immutable(uint)[] protocols;
-	
-	public shared this(shared ServerInfo info, uint[] protocols, uint[] supported) {
-		this.info = info;
-		this.protocols = checkProtocols(protocols, supported).idup;
-		assert(this.protocols.length);
-	}
 
+	public shared this(shared ServerInfo info) {
+		this.info = info;
+	}
+	
 	/**
-	 * Starts the server.
+	 * Starts the server on the given address.
 	 * The server can be started using an ip/port combination (if the port
 	 * is not given the game's default one will be used), and an optional
 	 * handler (for the management of the players) and a query.
 	 */
-	public final shared void start(Address address, shared Handler handler=new shared Handler(), shared Query query=null) {
-		return this.startImpl(address, handler, query);
+	public final shared void start(Address address, shared Query query=null) {
+		this.startImpl(address, query);
 	}
-
+	
 	/// ditto
-	public final shared void start(Address address, shared Query query) {
-		return this.start(address, new shared Handler(), query);
+	public final shared void start(string ip, ushort port, shared Query query=null) {
+		this.start(getAddress(ip, port)[0], query);
 	}
-
+	
 	/// ditto
-	public final shared void start(string ip, ushort port, shared Handler handler=new shared Handler(), shared Query query=null) {
-		return this.start(getAddress(ip, port)[0], handler, query);
+	public final shared void start(string ip, shared Query query=null) {
+		this.start(ip, this.defaultPort, query);
 	}
-
-	/// ditto
-	public final shared void start(string ip, ushort port, shared Query query) {
-		return this.start(ip, port, new shared Handler(), query);
-	}
-
-	/// ditto
-	public final shared void start(string ip, shared Handler handler=new shared Handler(), shared Query query=null) {
-		return this.start(ip, this.defaultPort, handler, query);
-	}
-
-	/// ditto
-	public final shared void start(string ip, shared Query query) {
-		return this.start(ip, new shared Handler(), query);
-	}
-
-	protected abstract shared void startImpl(Address address, shared Handler handler, shared Query query);
-
+	
+	protected abstract shared void startImpl(Address address, shared Query query);
+	
 	/**
 	 * Gets the server's default port for the hosted game.
 	 */
 	public abstract shared pure nothrow @property @safe @nogc ushort defaultPort();
+
+}
+
+/**
+ * A generic server that only contains a ServerInfo, the supported protocols
+ * and the mothods to start it.
+ */
+abstract class GenericGameServer : GenericServer {
+
+	public immutable immutable(uint)[] protocols;
+	protected shared Handler handler;
+	
+	public shared this(shared ServerInfo info, uint[] protocols, uint[] supported, shared Handler handler) {
+		super(info);
+		this.protocols = checkProtocols(protocols, supported).idup;
+		assert(this.protocols.length);
+		this.handler = handler;
+	}
+
+	protected shared void onClientJoin(shared Client client) {
+		atomicOp!"+="(this.info.online, 1);
+		this.handler.onClientJoin(client);
+	}
+
+	protected shared void onClientLeft(shared Client client) {
+		atomicOp!"-="(this.info.online, 1);
+		this.handler.onClientLeft(client);
+	}
 
 }
 
@@ -104,6 +133,8 @@ class Handler {
 	public shared void onClientJoin(shared Client client) {}
 
 	public shared void onClientLeft(shared Client client) {}
+
+	public shared void onClientPacket(shared Client client, ubyte[] packet) {}
 
 }
 

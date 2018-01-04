@@ -83,7 +83,7 @@ class Query {
 
 		private void regenerateBasicQuery() {
 			auto appender = createAppender();
-			appender.put(info.motd);
+			appender.put(info.motd.raw);
 			appender.put(info.gametype);
 			appender.put(info.map);
 			appender.put(to!string(info.online));
@@ -96,7 +96,7 @@ class Query {
 		private void regenerateFullQuery() {
 			auto appender = createAppender();
 			appender.put("splitnum", "\x80");
-			appender.put("hostname", info.motd);
+			appender.put("hostname", info.motd.raw);
 			appender.put("gametype", info.gametype);
 			appender.put("game_id", this.game);
 			appender.put("version", "?");

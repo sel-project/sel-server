@@ -47,10 +47,10 @@ public enum string[][uint] javaSupportedProtocols = [
 	340u: ["1.12.2"],
 ];
 
-abstract class JavaServer : GenericServer {
+abstract class JavaServer : GenericGameServer {
 
-	public shared this(shared ServerInfo info, uint[] protocols, uint[] supportedProtocols) {
-		super(info, protocols, supportedProtocols);
+	public shared this(shared ServerInfo info, uint[] protocols, uint[] supportedProtocols, shared Handler handler) {
+		super(info, protocols, supportedProtocols, handler);
 	}
 
 	public override shared pure nothrow @property @safe @nogc ushort defaultPort() {
@@ -71,20 +71,24 @@ template JavaServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSuppo
 
 	class JavaServerImpl : JavaServer {
 	
-		public shared this(shared ServerInfo info, uint[] protocols=supportedProtocols) {
-			super(info, protocols, supportedProtocols);
+		public shared this(shared ServerInfo info, uint[] protocols=supportedProtocols, shared Handler handler=new shared Handler()) {
+			super(info, protocols, supportedProtocols, handler);
+		}
+
+		public shared this(shared ServerInfo info, shared Handler handler, uint[] protocols=supportedProtocols) {
+			this(info, protocols, handler);
 		}
 		
 		/**
 		 * Starts the server in a new thread.
 		 */
-		protected override shared void startImpl(Address address, shared Handler handler, shared Query query) {
+		protected override shared void startImpl(Address address, shared Query query) {
 			Socket socket = new TcpSocket(address.addressFamily);
 			socket.setOption(SocketOptionLevel.SOCKET, SocketOption.REUSEADDR, true);
 			socket.blocking = true;
 			socket.bind(address);
 			socket.listen(10);
-			spawn(&this.acceptClients, cast(shared)socket, handler);
+			spawn(&this.acceptClients, cast(shared)socket);
 			if(query !is null) {
 				Socket qsocket = new UdpSocket(address.addressFamily);
 				qsocket.blocking = true;
@@ -118,16 +122,16 @@ template JavaServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSuppo
 		/**
 		 * Accepts new connection and handle in a new thread.
 		 */
-		protected shared void acceptClients(shared Socket _socket, shared Handler handler) {
+		protected shared void acceptClients(shared Socket _socket) {
 			debug Thread.getThis().name = "java_server@" ~ (cast()_socket).localAddress.toString() ~ "/accept_clients";
 			Socket socket = cast()_socket;
 			while(true) {
 				//Socket client = socket.accept();
-				spawn(&this.handleNewClient, cast(shared)socket.accept(), handler);
+				spawn(&this.handleNewClient, cast(shared)socket.accept());
 			}
 		}
 		
-		protected shared void handleNewClient(shared Socket _client, shared Handler handler) {
+		protected shared void handleNewClient(shared Socket _client) {
 			Socket client = cast()_client;
 			debug Thread.getThis().name = "java_client@" ~ client.remoteAddress.toString() ~ "/handle";
 			client.setOption(SocketOptionLevel.SOCKET, SocketOption.RCVTIMEO, dur!"seconds"(8));
@@ -147,7 +151,7 @@ template JavaServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSuppo
 							if(handshake.next == Handshake.LOGIN) {
 								// keep this thread for the player's session
 								stream.maxLength = 1024;
-								this.handleNewPlayer(stream, handshake, handler);
+								this.handleNewPlayer(stream, handshake);
 							} else {
 								// status
 								ubyte[] request = stream.receive();
@@ -178,7 +182,7 @@ template JavaServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSuppo
 		protected shared JSONValue[string] getPingResponse(Socket client, uint protocol, string ip, ushort port) {
 			if(!this.protocols.canFind(protocol)) protocol = this.protocols[$-1];
 			JSONValue[string] ret;
-			ret["description"] = this.info.motd;
+			ret["description"] = this.info.motd.java;
 			ret["version"] = ["protocol": JSONValue(protocol), "name": JSONValue(javaSupportedProtocols[protocol][0])];
 			ret["players"] = ["online": JSONValue(this.info.online), "max": JSONValue(this.info.max)];
 			if(this.info.favicon.length) ret["favicon"] = this.info.favicon;
@@ -190,7 +194,7 @@ template JavaServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSuppo
 		 * the status set to "login".
 		 * At this state the socket should be blocking with the timeout set to 8 seconds.
 		 */
-		protected shared void handleNewPlayer(Stream stream, Handshake handshake, shared Handler handler) {
+		protected shared void handleNewPlayer(Stream stream, Handshake handshake) {
 			// receive the login packet
 			ubyte[] loginp = stream.receive();
 			if(varuint.fromBuffer(loginp) == LoginStart.ID) {
@@ -217,9 +221,9 @@ template JavaServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSuppo
 							}
 						}
 					}();
-					handler.onClientJoin(session);
+					this.onClientJoin(session);
 					session.start(this); // blocking operation, returns when the session is closed
-					handler.onClientLeft(session);
+					this.onClientLeft(session);
 				}
 			}
 		}
@@ -278,15 +282,6 @@ abstract class JavaClient : Client {
 	
 	protected abstract shared ubyte[] createKeepAlive(uint id);
 	
-	public shared void disconnect(string message, bool translation=false) {
-		Stream stream = cast()this.stream;
-		stream.send(this.createDisconnect(JSONValue([(translation ? "translate" : "text"): message]).toString()));
-		stream.socket.close();
-		// let the client close the session when the packet has been received
-	}
-	
-	protected abstract shared ubyte[] createDisconnect(string json);
-	
 	/**
 	 * Sends a game packet to the client.
 	 */
@@ -302,6 +297,15 @@ abstract class JavaClient : Client {
 	public override shared void directSend(ubyte[] payload) {
 		(cast(ModifierStream)this.stream).stream.send(payload); // length is still appended
 	}
+
+	protected override shared void disconnectImpl(string message, bool translation) {
+		Stream stream = cast()this.stream;
+		stream.send(this.createDisconnect(JSONValue([(translation ? "translate" : "text"): message]).toString()));
+		stream.socket.close();
+		// let the client close the session when the packet has been received
+	}
+	
+	protected abstract shared ubyte[] createDisconnect(string json);
 	
 }
 
