@@ -16,6 +16,7 @@ module sel.server.client;
 
 import core.atomic : atomicOp;
 
+import std.json : JSONValue;
 import std.socket : Address;
 import std.uuid : UUID;
 
@@ -32,36 +33,53 @@ enum InputMode {
  */
 class Client {
 
+	// same as hncom's
+	public enum ubyte BEDROCK = 0;
+	public enum ubyte JAVA = 1;
+
+	protected enum VERSION_MINECRAFT = "Minecraft";
+	protected enum VERSION_JAVA = "Minecraft: Java Edition";
+	protected enum VERSION_EDU = "Minecraft: Education Edition";
+
 	private static shared uint _id;
 
 	public immutable uint id;
+	public immutable ubyte type;
 	public immutable uint protocol;
 
 	private Address _address;
 	private string _username;
 	private UUID _uuid;
+	
+	public immutable string gameName;
+	public immutable string gameVersion;
+	public immutable string game;
 
 	public string serverIp;
 	public ushort serverPort;
 
 	public string skinName;
-	public ubyte[] skinData;
-	//TODO skin geometry
-	//TODO skin cape
-	public string gameVersion;
-	public long deviceOS;
-	public string deviceModel;
+	public immutable(ubyte)[] skinData;
+	public string skinGeometryName;
+	public immutable(ubyte)[] skinGeometryData;
+	public immutable(ubyte)[] skinCape;
 	public InputMode inputMode = InputMode.keyboard;
-	public string language = "en_US";
+	public string language;
+
+	public JSONValue gameData;
 
 	public void delegate(ubyte[]) handler;
 
-	public shared this(uint protocol, Address address, string username, UUID uuid) {
+	public shared this(ubyte type, uint protocol, Address address, string username, UUID uuid, string gameName, string gameVersion) {
 		this.id = atomicOp!"+="(_id, 1);
+		this.type = type;
 		this.protocol = protocol;
 		this._address = cast(shared)address;
 		this._username = username;
 		this._uuid = cast(shared)uuid;
+		this.gameName = gameName;
+		this.gameVersion = gameVersion;
+		this.game = gameName ~ " " ~ gameVersion;
 		//TODO set handler
 	}
 
@@ -89,7 +107,7 @@ class Client {
 	/**
 	 * Gets the client's UUID.
 	 */
-	public shared pure nothrow @property @safe @nogc const UUID uuid() {
+	public shared pure nothrow @property @safe @nogc UUID uuid() {
 		return cast()this._uuid;
 	}
 
@@ -97,11 +115,15 @@ class Client {
 
 	public abstract shared synchronized void directSend(ubyte[] payload);
 
-	public final shared void disconnect(string message, bool translation=false) {
-		this.disconnectImpl(message, translation);
+	public final shared void disconnect(string message, bool translation=false, string[] params=[]) {
+		this.disconnectImpl(message, translation, params);
 	}
 
-	protected abstract shared void disconnectImpl(string message, bool translation);
+	public final shared void disconnect(string message, string[] params) {
+		this.disconnect(message, true, params);
+	}
+
+	protected abstract shared void disconnectImpl(string message, bool translation, string[] params);
 
 	public shared string toString() {
 		return "Client(" ~ this.username ~ ", " ~ this.uuid.toString() ~ ")";

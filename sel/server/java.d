@@ -58,8 +58,6 @@ abstract class JavaServer : GenericGameServer {
 	}
 	
 	protected shared void onLatencyUpdated(shared JavaClient session, ulong latency) {}
-	
-	protected shared void onPacketReceived(shared JavaClient session, ubyte[] packet) {}
 
 }
 
@@ -243,7 +241,7 @@ abstract class JavaClient : Client {
 	private shared Stream stream;
 	
 	public shared this(uint protocol, Stream stream, string username, UUID uuid) {
-		super(protocol, stream.socket.remoteAddress, username, uuid);
+		super(JAVA, protocol, stream.socket.remoteAddress, username, uuid, VERSION_JAVA, javaSupportedProtocols[protocol][0]);
 		this.stream = cast(shared)stream;
 	}
 	
@@ -259,7 +257,7 @@ abstract class JavaClient : Client {
 				if(varuint.decode(recv, 0) == this.keepAliveId) {
 					server.onLatencyUpdated(this, timer.peek().split!"msecs"().msecs);
 				} else {
-					server.onPacketReceived(this, recv);
+					server.handler.onClientPacket(this, recv);
 				}
 			} else if(stream.lastRecv == 0 || ++timeout == 3) {
 				// connection closed by the client or timed out
@@ -271,7 +269,7 @@ abstract class JavaClient : Client {
 			if(timer.peek() > usecs(15_000_000)) {
 				timeout = 0;
 				timer.reset();
-				stream.send(this.createKeepAlive(++nextKeepAlive));
+				stream.send(this.encodeKeepAlive(++nextKeepAlive));
 			}
 		}
 		timer.stop();
@@ -280,7 +278,7 @@ abstract class JavaClient : Client {
 	
 	protected abstract shared @property uint keepAliveId();
 	
-	protected abstract shared ubyte[] createKeepAlive(uint id);
+	protected abstract shared ubyte[] encodeKeepAlive(uint id);
 	
 	/**
 	 * Sends a game packet to the client.
@@ -298,14 +296,21 @@ abstract class JavaClient : Client {
 		(cast(ModifierStream)this.stream).stream.send(payload); // length is still appended
 	}
 
-	protected override shared void disconnectImpl(string message, bool translation) {
+	protected override shared void disconnectImpl(string message, bool translation, string[] params) {
+		JSONValue[string] reason;
+		reason[translation ? "translate" : "text"] = message;
+		if(params.length) {
+			JSONValue[] rp;
+			foreach(param ; params) rp ~= JSONValue(["text": param]);
+			reason["with"] = rp;
+		}
 		Stream stream = cast()this.stream;
-		stream.send(this.createDisconnect(JSONValue([(translation ? "translate" : "text"): message]).toString()));
+		stream.send(this.encodeDisconnect(JSONValue(reason).toString()));
 		stream.socket.close();
 		// let the client close the session when the packet has been received
 	}
 	
-	protected abstract shared ubyte[] createDisconnect(string json);
+	protected abstract shared ubyte[] encodeDisconnect(string json);
 	
 }
 
@@ -321,12 +326,12 @@ class JavaClientOf(uint __protocol) : JavaClient {
 	protected override shared @property uint keepAliveId() {
 		return ServerboundKeepAlive.ID;
 	}
-	
-	protected override shared ubyte[] createKeepAlive(uint id) {
+
+	protected override shared ubyte[] encodeKeepAlive(uint id) {
 		return new ClientboundKeepAlive(id).encode();
 	}
 	
-	protected override shared ubyte[] createDisconnect(string json) {
+	protected override shared ubyte[] encodeDisconnect(string json) {
 		return new ClientboundDisconnect(json).encode();
 	}
 	

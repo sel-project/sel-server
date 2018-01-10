@@ -20,12 +20,12 @@ import std.algorithm : sort, canFind, all, max;
 import std.base64 : Base64, Base64Impl, Base64Exception;
 import std.bitmanip : peek;
 import std.concurrency : spawn, Tid, sendc = send, receiveTimeout, receiveOnly;
-import std.conv : to;
+import std.conv : to, ConvException;
 import std.datetime : dur;
 import std.datetime.stopwatch : StopWatch;
 import std.json : JSONValue, JSON_TYPE, parseJSON, JSONException;
 import std.socket : Address, AddressFamily, InternetAddress, Internet6Address, Socket, UdpSocket, SocketOptionLevel, SocketOption;
-import std.string : indexOf, lastIndexOf;
+import std.string : indexOf, lastIndexOf, startsWith, split, join;
 import std.system : Endian;
 import std.typecons : Tuple;
 import std.uuid : UUID, parseUUID, UUIDParsingException;
@@ -360,17 +360,18 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSu
 									try clientData = parseJWT(readBody());
 									catch(JSONException) return this.close();
 									if(clientData.type == JSON_TYPE.OBJECT) {
+										auto gameVersion = "GameVersion" in clientData.object;
 										this.client = (){
 											final switch(protocol) {
 												foreach(p ; TupleOf!supportedProtocols) {
 													case p:
-													return cast(shared BedrockClient)new shared BedrockClientOf!p(this, protocol, displayName.str, uuid);
+													return cast(shared BedrockClient)new shared BedrockClientOf!p(this, protocol, displayName.str, uuid, gameVersion && (*gameVersion).type == JSON_TYPE.STRING ? (*gameVersion).str : "");
 												}
 											}
 										}();
 										//TODO validate username
 										this.handleFunction = &this.handlePlay;
-										this.client.parseClientData(clientData);
+										this.client.parseClientData(clientData.object);
 										this.handler.onClientJoin(this.client);
 										return;
 									}
@@ -433,8 +434,21 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSu
 
 		public shared Tid uncompression, compression;
 		
-		public shared this(uint protocol, shared RaknetSession session, string username, UUID uuid) {
-			super(protocol, cast()session.address, username, uuid);
+		public shared this(uint protocol, shared RaknetSession session, string username, UUID uuid, string gameVersion) {
+			auto versions = bedrockSupportedProtocols[protocol];
+			string gv;
+			if(versions.canFind(gameVersion)) {
+				gv = gameVersion;
+			} else {
+				// may be a beta
+				foreach(version_ ; versions) {
+					if(gameVersion.startsWith(version_)) {
+						gv = version_;
+						break;
+					}
+				}
+			}
+			super(BEDROCK, protocol, cast()session.address, username, uuid, VERSION_MINECRAFT, gv.length ? gv : versions[0]); //TODO edu mode
 			this.raknetSession = session;
 			sendc(cast()raknetSession.compressionManager, this);
 		}
@@ -450,44 +464,54 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSu
 			sendc(cast()this.compression, "");
 		}
 		
-		public shared void parseClientData(JSONValue json) {
-			auto skinName = "SkinId" in json;
-			auto skinData = "SkinData" in json;
-			auto gameVersion = "GameVersion" in json;
-			auto deviceOS = "DeviceOS" in json;
-			auto deviceModel = "DeviceModel" in json;
-			auto inputMode = "CurrentInputMode" in json;
-			auto language = "LanguageCode" in json;
-			if(skinName && skinName.type == JSON_TYPE.STRING) {
-				this.skinName = skinName.str;
+		public shared void parseClientData(JSONValue[string] json) {
+			void parse(string index, JSON_TYPE type, void delegate(JSONValue) success) {
+				auto ret = index in json;
+				if(ret && ret.type == type) {
+					success(*ret);
+					json.remove(index);
+				}
 			}
-			if(skinData && skinData.type == JSON_TYPE.STRING) {
-				immutable str = skinData.str;
+			parse("SkinId", JSON_TYPE.STRING, (JSONValue value){
+				skinName = value.str;
+			});
+			parse("SkinData", JSON_TYPE.STRING, (JSONValue value){
 				//TODO check length
-				try this.skinData = cast(shared)Base64.decode(skinData.str);
+				try skinData = Base64.decode(value.str).idup;
 				catch(Base64Exception) {}
-			}
-			if(gameVersion && gameVersion.type == JSON_TYPE.STRING) {
-				this.gameVersion = gameVersion.str;
-			}
-			if(deviceOS && deviceOS.type == JSON_TYPE.INTEGER) {
-				this.deviceOS = deviceOS.integer;
-			}
-			if(deviceModel && deviceModel.type == JSON_TYPE.STRING) {
-				this.deviceModel = deviceModel.str;
-			}
-			if(inputMode && inputMode.type == JSON_TYPE.INTEGER) {
-				this.inputMode = (){
-					switch(inputMode.integer) {
+			});
+			parse("SkinGeometryName", JSON_TYPE.STRING, (JSONValue value){
+				skinGeometryName = value.str;
+			});
+			parse("SkinGeometry", JSON_TYPE.STRING, (JSONValue value){
+				try skinGeometryData = Base64.decode(value.str).idup;
+				catch(Base64Exception) {}
+			});
+			parse("CapeData", JSON_TYPE.STRING, (JSONValue value){
+				try skinCape = Base64.decode(value.str).idup;
+				catch(Base64Exception) {}
+			});
+			parse("CurrentInputMode", JSON_TYPE.INTEGER, (JSONValue value){
+				inputMode = (){
+					switch(value.integer) {
 						case 0: return InputMode.controller;
 						case 1: return InputMode.touch;
 						default: return InputMode.keyboard;
 					}
 				}();
-			}
-			if(language && language.type == JSON_TYPE.STRING) {
-				this.language = language.str;
-			}
+			});
+			parse("LanguageCode", JSON_TYPE.STRING, (JSONValue value){
+				language = value.str;
+			});
+			parse("ServerAddress", JSON_TYPE.STRING, (JSONValue value){
+				auto spl = value.str.split(":");
+				if(spl.length >= 2) {
+					serverIp = spl[0..$-1].join(":");
+					try serverPort = to!ushort(spl[$-1]);
+					catch(ConvException) {}
+				}
+			});
+			this.gameData = JSONValue(json);
 		}
 
 		public shared void handle(ubyte[] buffer) {
@@ -497,7 +521,9 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSu
 		private shared void startUncompression() {
 			while(true) {
 				foreach(packet ; uncompressPackets(receiveOnly!(immutable(ubyte)[])())) {
-					sendc(cast()this.raknetSession.handlerThread, cast(shared Client)this, packet.idup);
+					//sendc(cast()this.raknetSession.handlerThread, cast(shared Client)this, packet.idup);
+					//TODO handle in another thread
+					this.raknetSession.handler.onClientPacket(cast(shared)this, packet);
 				}
 			}
 		}
@@ -516,7 +542,7 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSu
 			(cast()this.raknetSession.stream).send(ubyte(254) ~ payload);
 		}
 
-		public override shared void disconnectImpl(string message, bool translation) {
+		public override shared void disconnectImpl(string message, bool translation, string[] params) {
 			this.send(this.createDisconnect(message));
 			this.raknetSession.close();
 		}
@@ -585,8 +611,8 @@ template BedrockServerImpl(uint[] rawSupportedProtocols) if(checkProtocols(rawSu
 			
 			class BedrockClientOf : BedrockClient {
 				
-				public shared this(shared RaknetSession session, uint protocol, string username, UUID uuid) {
-					super(protocol, session, username, uuid);
+				public shared this(shared RaknetSession session, uint protocol, string username, UUID uuid, string gameVersion) {
+					super(protocol, session, username, uuid, gameVersion);
 				}
 				
 				public override shared ubyte[] createDisconnect(string message) {
