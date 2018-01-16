@@ -106,14 +106,23 @@ abstract class GenericServer {
  */
 abstract class GenericGameServer : GenericServer {
 
-	public immutable immutable(uint)[] protocols;
+	private immutable immutable(uint)[] supported;
+	protected immutable(uint)[] _protocols;
 	protected shared Handler handler;
 	
 	public shared this(shared ServerInfo info, uint[] protocols, uint[] supported, shared Handler handler) {
 		super(info);
-		this.protocols = checkProtocols(protocols, supported).idup;
-		assert(this.protocols.length);
+		this.supported = supported.idup;
+		this.protocols = protocols;
 		this.handler = handler;
+	}
+
+	public final shared pure nothrow @property @safe @nogc immutable(uint)[] protocols() {
+		return this._protocols;
+	}
+
+	public final shared @property immutable(uint)[] protocols(uint[] protocols) {
+		return this._protocols = checkProtocols(protocols, this.supported).idup;
 	}
 
 	protected shared void onClientJoin(shared Client client) {
@@ -138,7 +147,7 @@ class Handler {
 
 }
 
-uint[] checkProtocols(uint[] protocols, uint[] supported) {
+uint[] checkProtocols(uint[] protocols, inout(uint)[] supported) {
 	sort(protocols);
 	uint[] ret;
 	foreach(i, protocol; protocols) {
