@@ -6,5 +6,3 @@ dependency "sel-net" version="~>0.2.0"
 dependency "sel-utils" version="==1.4.1"
 importPaths "."
 sourcePaths "."
-
-dflags "-op"
