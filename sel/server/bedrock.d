@@ -49,7 +49,7 @@ public enum string[][uint] bedrockSupportedProtocols = [
 	137u: ["1.2.0", "1.2.1", "1.2.2", "1.2.3"],
 	141u: ["1.2.5"],
 	150u: ["1.2.6"],
-	160u: ["1.2.7", "1.2.8"],
+	160u: ["1.2.7", "1.2.8", "1.2.9"],
 ];
 
 abstract class BedrockServer : GenericGameServer {
