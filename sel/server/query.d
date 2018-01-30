@@ -20,7 +20,7 @@ import std.conv : to;
 import std.datetime.stopwatch : StopWatch;
 import std.string : join;
 
-import sel.server.util;
+import sel.server.server;
 
 class Query {
 

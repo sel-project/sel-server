@@ -16,6 +16,6 @@ module sel.server;
 
 public import sel.server.bedrock : bedrockSupportedProtocols, BedrockServer, BedrockServerImpl;
 public import sel.server.client : Client, InputMode;
-public import sel.server.java : javaSupportedProtocols, JavaServer, JavaServerImpl;
+public import sel.server.java : JavaServer, JavaClient, javaSupportedProtocols = supportedProtocols;
 public import sel.server.query : Query;
-public import sel.server.util : ServerInfo, Handler;
+public import sel.server.server : ServerInfo, Handler;

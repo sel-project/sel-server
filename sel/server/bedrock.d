@@ -34,7 +34,7 @@ import std.zlib : Compress, UnCompress, ZlibException;
 import sel.net.stream : UdpStream, RaknetStream;
 import sel.server.client : Client, InputMode;
 import sel.server.query : Query;
-import sel.server.util;
+import sel.server.server;
 
 import sul.protocol.raknet8.encapsulated : ClientConnect, ServerHandshake, ClientHandshake, ClientCancelConnection, ConnectedPing = Ping, ConnectedPong = Pong;
 import sul.protocol.raknet8.types : RaknetAddress = Address;

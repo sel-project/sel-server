@@ -12,7 +12,7 @@
  * See the GNU Lesser General Public License for more details.
  * 
  */
-module sel.server.util;
+module sel.server.server;
 
 import core.atomic : atomicOp;
 
