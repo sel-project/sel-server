@@ -1,166 +1,156 @@
 ﻿/*
- * Copyright (c) 2017-2018 SEL
- * 
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- * 
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- * See the GNU Lesser General Public License for more details.
- * 
- */
-/**
- * Copyright: 2017-2018 sel-project
- * License: LGPL-3.0
- * Authors: Kripth
- * Source: $(HTTP github.com/sel-project/sel-server/sel/server/query.d, sel/server/query.d)
+ * Copyright (c) 2017-2018 sel-project
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *
  */
 module sel.server.query;
 
-import std.array : Appender;
-import std.bitmanip : nativeToLittleEndian;
 import std.conv : to;
-import std.datetime.stopwatch : StopWatch;
-import std.string : join;
+import std.system : endian;
 
-import sel.server.server;
+import kiss.event : EventLoop;
 
-class Query {
+import sel.server.server : Server;
+import sel.server.util;
 
-	private shared ServerInfo info;
+import xbuffer;
 
-	public shared string software = "sel-server";
-	public shared string[] plugins;
+version(Query):
 
-	public shared string[] players;
+// test
+import std.stdio : writeln;
 
-	public shared this(shared ServerInfo info) {
-		this.info = info;
+class QueryServer : Server {
+
+	private QueryInfo _queryInfo;
+
+	private string game;
+
+	this(EventLoop eventLoop, QueryInfo queryInfo, string game) {
+		super(eventLoop, queryInfo.serverInfo);
+		_queryInfo = queryInfo;
+		this.game = game;
 	}
 
-	public class Handler {
+	public @property QueryInfo queryInfo() pure nothrow @safe @nogc {
+		return _queryInfo;
+	}
 
-		private immutable string game;
-		private immutable string ip;
-		private immutable ushort port;
+	protected override bool hostImpl(string ip, ushort port) {
+		//TODO create UDP socket and receive
+		AsyncUDPSocket socket = new AsyncUDPSocket(this.eventLoop);
+		socket.host(ip, port);
+		auto handler = new QueryHandler(ip, port);
+		return handler.run();
+	}
 
-		private int challengeToken = 1;
-		private string[int] sessions;
-		private StopWatch sessionTimer;
+	public override void kill() {
+		//TODO
+	}
 
-		private immutable(ubyte)[] basicQuery, fullQuery;
-		private StopWatch basicTimer, fullTimer;
-		private long lastBasic = long.min, lastFull = long.min;
+	private class QueryHandler {
 
-		public this(string game, string ip, ushort port) {
-			this.game = game;
+		private string ip;
+		private ushort port;
+
+		this(string ip, ushort port) {
 			this.ip = ip;
 			this.port = port;
-			this.sessionTimer.start();
-			this.basicTimer.start();
-			this.fullTimer.start();
 		}
-		
-		public ubyte[] handle(ubyte[] payload) {
-			if(payload.length >= 5) {
-				if(payload[0] == 0) {
-					// query request
-					if(payload.length == 13) {
-						mixin(createHandler("full", 5_000));
-					} else {
-						mixin(createHandler("basic", 1_000));
-					}
-				} else if(payload[0] == 9) {
-					// login
-					if(this.sessionTimer.peek().split!"msecs"().msecs > 30_000) {
-						this.sessions.clear();
-						this.sessionTimer.reset();
-					}
-					this.sessions[this.challengeToken] = ""; //TODO store the address
-					return ubyte(9) ~ payload[1..5] ~ cast(ubyte[])to!string(this.challengeToken++) ~ ubyte(0);
-				}
 
+		bool run() {
+			AsyncUDPSocket socket = new AsyncUDPSocket(eventLoop);
+			socket.host(this.ip, this.port);
+			return socket.run(&this.handle);
+		}
+
+		void handle(UDPEvent event) {
+			writeln(event);
+		}
+
+		private void writeShortQuery(Buffer buffer) {
+			void put(Endian endianness=endian, T)(T value) {
+				buffer.write!endianness(value);
+				buffer.write!ubyte(0);
 			}
-			return [];
+			put(serverInfo.motd.raw);
+			put(queryInfo.gametype);
+			put(queryInfo.map);
+			put(to!string(serverInfo.online));
+			put(to!string(serverInfo.max));
+			put!(Endian.littleEndian, ushort)(this.port);
+			put(this.ip);
 		}
 
-		private void regenerateBasicQuery() {
-			auto appender = createAppender();
-			appender.put(info.motd.raw);
-			appender.put(info.gametype);
-			appender.put(info.map);
-			appender.put(to!string(info.online));
-			appender.put(to!string(info.max));
-			appender.put(cast(ubyte[])nativeToLittleEndian(this.port));
-			appender.put(this.ip);
-			this.basicQuery = appender.data.idup;
-		}
-
-		private void regenerateFullQuery() {
-			auto appender = createAppender();
-			appender.put("splitnum", "\x80");
-			appender.put("hostname", info.motd.raw);
-			appender.put("gametype", info.gametype);
-			appender.put("game_id", this.game);
-			appender.put("version", "?");
-			appender.put("plugins", software ~ (plugins.length ? ": " ~ plugins.join("; ") : ""));
-			appender.put("map", info.map);
-			appender.put("numplayers", to!string(info.online));
-			appender.put("maxplayers", to!string(info.max));
-			appender.put("hostport", to!string(this.port));
-			appender.put("hostip", this.ip);
-			appender.put("\0\1player_\0");
-			foreach(player ; players) {
-				appender.put(player);
-			}
-			appender.appender.put(ubyte(0));
-			this.fullQuery = appender.data.idup;
+		private void writeLongQuery(Buffer buffer) {
+			//TODO
 		}
 
 	}
 
 }
 
-private auto createAppender() {
+class BedrockQueryServer : QueryServer {
 
-	struct _ {
-
-		public Appender!(ubyte[]) appender;
-
-		void put(ubyte[] bytes) {
-			this.appender.put(bytes);
-		}
-
-		void put(string value) {
-			this.appender.put(cast(ubyte[])value);
-			this.appender.put(ubyte(0));
-		}
-
-		void put(string key, string value) {
-			this.put(key);
-			this.put(value);
-		}
-
-		alias appender this;
-
+	public this(EventLoop eventLoop, QueryInfo queryInfo) {
+		super(eventLoop, queryInfo, "MINECRAFTPE");
 	}
 
-	return _();
+	public this(QueryInfo queryInfo) {
+		this(getThreadEventLoop(), queryInfo);
+	}
+
+	public this(EventLoop eventLoop, ServerInfo serverInfo) {
+		this(eventLoop, new QueryInfo(serverInfo));
+	}
+
+	public this(ServerInfo serverInfo) {
+		this(getThreadEventLoop, serverInfo);
+	}
+
+	protected override ushort defaultPort() {
+		return 19132;
+	}
 
 }
 
-private string createHandler(string type, uint time) {
-	import std.string : capitalize;
-	return "
-		immutable peek = this." ~ type ~ "Timer.peek().split!`msecs`().msecs;
-		if(peek > this.last" ~ capitalize(type) ~ " + " ~ to!string(time) ~ ") {
-			this.regenerate" ~ capitalize(type) ~ "Query();
-			this.last" ~ capitalize(type) ~ " = peek;
-			this." ~ type ~ "Timer.reset();
-		}
-		return this." ~ type ~ "Query.dup;
-	";
+class JavaQueryServer : QueryServer {
+
+	public this(EventLoop eventLoop, QueryInfo queryInfo) {
+		super(eventLoop, queryInfo, "MINECRAFT");
+	}
+	
+	public this(QueryInfo queryInfo) {
+		this(getThreadEventLoop(), queryInfo);
+	}
+	
+	public this(EventLoop eventLoop, ServerInfo serverInfo) {
+		this(eventLoop, new QueryInfo(serverInfo));
+	}
+	
+	public this(ServerInfo serverInfo) {
+		this(getThreadEventLoop, serverInfo);
+	}
+
+	protected override ushort defaultPort() {
+		return 25565;
+	}
+
 }

@@ -1,176 +1,119 @@
 ﻿/*
- * Copyright (c) 2017-2018 SEL
- * 
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- * 
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- * See the GNU Lesser General Public License for more details.
- * 
- */
-/**
- * Copyright: 2017-2018 sel-project
- * License: LGPL-3.0
- * Authors: Kripth
- * Source: $(HTTP github.com/sel-project/sel-server/sel/server/server.d, sel/server/server.d)
+ * Copyright (c) 2017-2018 sel-project
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *
  */
 module sel.server.server;
 
-import core.atomic : atomicOp;
-
-import std.algorithm : sort, all, canFind;
-import std.conv : to;
+import std.algorithm : sort;
+import std.range : SortedRange;
 import std.socket : Address, getAddress;
-import std.typetuple : TypeTuple;
 
-import sel.server.client : Client;
-import sel.server.query : Query;
+import kiss.event : EventLoop;
 
-/**
- * Basic server's informations, used to display the server in the
- * game's server list and in the queries.
- */
-class ServerInfo {
+import sel.server.util : ServerInfo, Client;
 
-	static struct MOTD {
+import xbuffer : Buffer;
 
-		string raw;
+class Server {
 
-		string bedrock, java;
+	private EventLoop _eventLoop;
+	private ServerInfo _serverInfo;
 
-		this(string motd) {
-			this.opAssign(motd);
-		}
+	public this(EventLoop eventLoop, ServerInfo serverInfo) {
+		_eventLoop = eventLoop;
+		_serverInfo = serverInfo;
+	}
 
-		void opAssign(string motd) {
-			this.raw = motd; //TODO remove formatting
-			this.bedrock = this.java = motd;
-		}
+	public @property EventLoop eventLoop() pure nothrow @safe @nogc {
+		return _eventLoop;
+	}
 
-		shared void opAssign(string motd) {
-			(cast()this).opAssign(motd);
-		}
-
+	public @property ServerInfo serverInfo() pure nothrow @safe @nogc {
+		return _serverInfo;
 	}
 	
-	public MOTD motd = MOTD("A Minecraft Server");
-	
-	public int online = 0;
-	public int max = 32;
+	protected abstract @property ushort defaultPort() pure nothrow @safe @nogc;
 
-	public string favicon; // must be already encoded
-
-	public string gametype = "SMP";
-	public string map = "world";
-	
-}
-
-abstract class GenericServer {
-
-	protected shared ServerInfo info;
-
-	public shared this(shared ServerInfo info) {
-		this.info = info;
+	public void host(Address address) {
+		this.hostImpl(address);
 	}
-	
-	/**
-	 * Starts the server on the given address.
-	 * The server can be started using an ip/port combination (if the port
-	 * is not given the game's default one will be used), and an optional
-	 * handler (for the management of the players) and a query.
-	 */
-	public final shared void start(Address address, shared Query query=null) {
-		this.startImpl(address, query);
+
+	public void host(string ip, ushort port) {
+		this.host(getAddress(ip, port)[0]);
 	}
-	
-	/// ditto
-	public final shared void start(string ip, ushort port, shared Query query=null) {
-		this.start(getAddress(ip, port)[0], query);
+
+	public void host(string ip) {
+		this.host(ip, this.defaultPort);
 	}
-	
-	/// ditto
-	public final shared void start(string ip, shared Query query=null) {
-		this.start(ip, this.defaultPort, query);
-	}
-	
-	protected abstract shared void startImpl(Address address, shared Query query);
-	
-	/**
-	 * Gets the server's default port for the hosted game.
-	 */
-	public abstract shared pure nothrow @property @safe @nogc ushort defaultPort();
+
+	protected abstract void hostImpl(Address address);
+
+	public abstract void kill(); 
 
 }
 
-/**
- * A generic server that only contains a ServerInfo, the supported protocols
- * and the mothods to start it.
- */
-abstract class GenericGameServer : GenericServer {
+class GameServer : Server {
 
-	private immutable immutable(uint)[] supported;
-	protected immutable(uint)[] _protocols;
-	protected shared Handler handler;
-	
-	public shared this(shared ServerInfo info, uint[] protocols, uint[] supported, shared Handler handler) {
-		super(info);
-		this.supported = supported.idup;
-		this.protocols = protocols;
+	alias SortedProtocols = SortedRange!(uint[], "a < b");
+
+	protected Handler handler;
+
+	private SortedProtocols _protocols;
+
+	this(EventLoop eventLoop, ServerInfo serverInfo, Handler handler, uint[] protocols) {
+		super(eventLoop, serverInfo);
 		this.handler = handler;
+		_protocols = sort(protocols); //TODO remove duplicates and verify that they're accepted
 	}
 
-	public final shared pure nothrow @property @safe @nogc immutable(uint)[] protocols() {
-		return this._protocols;
-	}
-
-	public final shared @property immutable(uint)[] protocols(uint[] protocols) {
-		return this._protocols = checkProtocols(protocols, this.supported).idup;
-	}
-
-	protected shared void onClientJoin(shared Client client) {
-		atomicOp!"+="(this.info.online, 1);
-		this.handler.onClientJoin(client);
-	}
-
-	protected shared void onClientLeft(shared Client client) {
-		atomicOp!"-="(this.info.online, 1);
-		this.handler.onClientLeft(client);
+	public @property SortedProtocols protocols() pure nothrow @safe @nogc {
+		return _protocols;
 	}
 
 }
 
-class Handler {
+interface Handler {
 
-	public shared void onClientJoin(shared Client client) {}
+	void onJoin(Client);
 
-	public shared void onClientLeft(shared Client client) {}
+	void onLeft(Client);
 
-	public shared void onClientPacket(shared Client client, ubyte[] packet) {}
+	void onPacket(Client, Buffer);
+
+	void onLatencyUpdate(Client);
+
+	void onPacketLossUpdate(Client);
 
 }
 
-uint[] checkProtocols(uint[] protocols, inout(uint)[] supported) {
-	sort(protocols);
-	uint[] ret;
-	foreach(i, protocol; protocols) {
-		if(supported.canFind(protocol) && (ret.length == 0 || protocol != ret[$-1])) {
-			ret ~= protocol;
-		}
-	}
-	return ret;
-}
+class DefaultHandler : Handler {
 
-template TupleOf(alias array) {
-	mixin((){
-		string ret = "alias TupleOf = TypeTuple!(";
-		foreach(element ; array) {
-			ret ~= element.to!string;
-			ret ~= ",";
-		}
-		return ret ~ ");";
-	}());
+	override void onJoin(Client client) {}
+
+	override void onLeft(Client client) {}
+
+	override void onPacket(Client client, Buffer buffer) {}
+
+	override void onLatencyUpdate(Client client) {}
+
+	override void onPacketLossUpdate(Client client) {}
+
 }
