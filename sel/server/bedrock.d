@@ -16,6 +16,7 @@ module sel.server.bedrock;
 
 import std.conv : to;
 import std.socket : Address;
+import std.uuid : UUID;
 
 import kiss.event : EventLoop;
 import kiss.net.UdpSocket : UdpSocket;
@@ -45,12 +46,24 @@ class BedrockServer : GameServer {
 		socket.bind(address.toAddrString(), address.toPortString().to!ushort);
 		
 		void handle(in ubyte[] data, Address address) {
-			writeln(data);
 			switch(data[0]) {
 				case UnconnectedPing.ID:
 					UnconnectedPing ping = new UnconnectedPing();
 					ping.autoDecode(cast(ubyte[])data);
 					with(this.serverInfo) socket.sendTo(new UnconnectedPong(ping.pingId, 0, "MCPE;" ~ motd.bedrock ~ ";" ~ this.protocols[$-1].to!string ~ ";" ~ bedrockProtocols[this.protocols[$-1]][0] ~ ";" ~ online.to!string ~ ";" ~ max.to!string).autoEncode(), address).writeln;
+					break;
+				case OpenConnectionRequest1.ID:
+					OpenConnectionRequest1 packet = new OpenConnectionRequest1();
+					packet.autoDecode(cast(ubyte[])data);
+					if(packet.mtu.length > 448 && packet.mtu.length < 4096) {
+						// do not allow MTUs that are too small or too big
+						socket.sendTo(new OpenConnectionReply1(0, false, packet.mtu.length.to!ushort).autoEncode(), address);
+					}
+					break;
+				case OpenConnectionRequest2.ID:
+					OpenConnectionRequest2 packet = new OpenConnectionRequest2();
+					packet.autoDecode(cast(ubyte[])data);
+					//TODO create RaknetClient
 					break;
 				default:
 					break;
@@ -63,5 +76,17 @@ class BedrockServer : GameServer {
 	}
 
 	protected override void kill() {}
+
+	class RaknetClient {
+
+		class BedrockClient : Client {
+
+			this(Address address, string username, UUID uuid) {
+				super(address, username, uuid);
+			}
+
+		}
+
+	}
 
 }

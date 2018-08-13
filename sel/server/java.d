@@ -215,7 +215,7 @@ class JavaServer : GameServer {
 				//TODO validate protocol and username
 
 				// after validation
-				this.client = new JavaClient(login.username, randomUUID());
+				this.client = new JavaClient(this.stream.conn.remoteAddress, login.username, randomUUID());
 				new LoginSuccess(client.uuid.toString(), client.username).encode(buffer);
 				this.stream.send(buffer);
 				addJavaClient(this.client);
@@ -238,8 +238,8 @@ class JavaServer : GameServer {
 			private StopWatch stopWatch;
 			private uint keepAliveCount = 1;
 
-			this(string username, UUID uuid) {
-				super(username, uuid);
+			this(Address address, string username, UUID uuid) {
+				super(address, username, uuid);
 				this.id = _id++;
 				// init constants and functions
 				this.serverboundKeepAliveId = getServerboundKeepAliveId(handshake.protocol);

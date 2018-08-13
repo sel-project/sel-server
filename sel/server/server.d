@@ -32,6 +32,10 @@ import sel.server.util : ServerInfo, Client;
 
 import xbuffer : Buffer;
 
+/**
+ * Base class for every server. It contains an event loop and
+ * informations about the server.
+ */
 class Server {
 
 	private EventLoop _eventLoop;
@@ -42,34 +46,54 @@ class Server {
 		_serverInfo = serverInfo;
 	}
 
+	/**
+	 * Gets the server's event loop.
+	 */
 	public @property EventLoop eventLoop() pure nothrow @safe @nogc {
 		return _eventLoop;
 	}
 
+	/**
+	 * Gets the server's game informations.
+	 */
 	public @property ServerInfo serverInfo() pure nothrow @safe @nogc {
 		return _serverInfo;
 	}
-	
+
+	/**
+	 * Gets the server's default port.
+	 */
 	protected abstract @property ushort defaultPort() pure nothrow @safe @nogc;
 
+	/**
+	 * Starts the server on the given address or ip/port combination.
+	 */
 	public void host(Address address) {
 		this.hostImpl(address);
 	}
 
+	/// ditto
 	public void host(string ip, ushort port) {
 		this.host(getAddress(ip, port)[0]);
 	}
 
+	/// ditto
 	public void host(string ip) {
 		this.host(ip, this.defaultPort);
 	}
 
 	protected abstract void hostImpl(Address address);
 
+	/**
+	 * Stops every listener started with the `host` method.
+	 */
 	public abstract void kill(); 
 
 }
 
+/**
+ * Base class for every game server.
+ */
 class GameServer : Server {
 
 	alias SortedProtocols = SortedRange!(uint[], "a < b");
@@ -84,11 +108,19 @@ class GameServer : Server {
 		_protocols = sort(protocols); //TODO remove duplicates and verify that they're accepted
 	}
 
+	/**
+	 * Gets the sorted protocols accepted by the server.
+	 * Example:
+	 * ---
+	 * assert(server.protocols.contains(120));
+	 * ---
+	 */
 	public @property SortedProtocols protocols() pure nothrow @safe @nogc {
 		return _protocols;
 	}
 
 }
+
 
 interface Handler {
 

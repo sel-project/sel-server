@@ -22,10 +22,14 @@
  */
 module sel.server.util;
 
+import std.socket : Address;
 import std.uuid : UUID;
 
 import sel.format : unformat;
 
+/**
+ * Informations about a server.
+ */
 class ServerInfo {
 	
 	static struct MOTD {
@@ -54,6 +58,9 @@ class ServerInfo {
 	
 }
 
+/**
+ * Informations about a query.
+ */
 class QueryInfo {
 
 	ServerInfo serverInfo;
@@ -72,7 +79,13 @@ class QueryInfo {
 
 }
 
+/**
+ * Representation of a client. Java and Bedrock clients extend
+ * this class.
+ */
 class Client {
+
+	private Address _address;
 
 	private string _username;
 	private UUID _uuid;
@@ -80,27 +93,56 @@ class Client {
 	protected uint _latency = 0;
 	protected float _packetLoss = 0;
 
-	this(string username, UUID uuid) {
+	this(Address address, string username, UUID uuid) {
+		_address = address;
 		_username = username;
 		_uuid = uuid;
 	}
 
+	/**
+	 * Gets the client's address.
+	 */
+	public @property Address address() pure nothrow @safe @nogc {
+		return _address;
+	}
+
+	/**
+	 * Gets the client's username.
+	 */
 	public @property string username() pure nothrow @safe @nogc {
 		return _username;
 	}
 
+	/**
+	 * Gets the client's UUID.
+	 */
 	public @property UUID uuid() pure nothrow @safe @nogc {
 		return _uuid;
 	}
 
+	/**
+	 * Gets the client's latency. For Java it is calculated
+	 * using the KeepAlive packets and it is very precise thanks
+	 * to the TCP protocol used; for Bedrock it is calculated using
+	 * the connected ping and pong packets and may be not very precise
+	 * due to the usage of an UDP protocol.
+	 */
 	public @property uint latency() pure nothrow @safe @nogc {
 		return _latency;
 	}
 
+	/**
+	 * Gets the client's packet loss, which is a number between 0
+	 * (no packet is lost) and 100 (every packet is lost).
+	 * Only for Bedrock.
+	 */
 	public @property float packetLoss() pure nothrow @safe @nogc {
 		return _packetLoss;
 	}
 
+	/**
+	 * Disconnects the client with the given message.
+	 */
 	public abstract void disconnect(string message);
 
 }
