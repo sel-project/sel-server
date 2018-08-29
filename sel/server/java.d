@@ -55,8 +55,8 @@ class JavaServer : GameServer {
 
 	private enum __protocols = javaProtocols.keys;
 
+	private TcpListener[] listeners;
 	private KissTimer timer;
-	//private AsyncTCPListener[] listeners;
 
 	private UnconnectedClient[] dead;
 	private UnconnectedClient.JavaClient[uint] clients;
@@ -78,11 +78,14 @@ class JavaServer : GameServer {
 		listener.listen(1024);
 		listener.onConnectionAccepted = &this.handle;
 		listener.start();
+		this.listeners ~= listener;
 	}
 
-	public override void kill() {
-
-		//TODO kill timer
+	public override void stop() {
+		// kill listeners
+		//foreach(listener ; this.listeners) listener.stop();
+		// kill timer
+		this.timer.stop();
 	}
 
 	// handles a new connection
@@ -215,7 +218,7 @@ class JavaServer : GameServer {
 				//TODO validate protocol and username
 
 				// after validation
-				this.client = new JavaClient(this.stream.conn.remoteAddress, login.username, randomUUID());
+				this.client = new JavaClient(login.username, randomUUID());
 				new LoginSuccess(client.uuid.toString(), client.username).encode(buffer);
 				this.stream.send(buffer);
 				addJavaClient(this.client);
@@ -227,10 +230,6 @@ class JavaServer : GameServer {
 
 		class JavaClient : Client {
 
-			private static uint _id = 0;
-
-			public immutable uint id;
-
 			private ubyte serverboundKeepAliveId;
 			private immutable ubyte clientboundKeepAliveId;
 			private void delegate(Buffer, uint) encodeKeepAlive;
@@ -238,9 +237,8 @@ class JavaServer : GameServer {
 			private StopWatch stopWatch;
 			private uint keepAliveCount = 1;
 
-			this(Address address, string username, UUID uuid) {
-				super(address, username, uuid);
-				this.id = _id++;
+			this(string username, UUID uuid) {
+				super(stream.conn.remoteAddress, username, uuid);
 				// init constants and functions
 				this.serverboundKeepAliveId = getServerboundKeepAliveId(handshake.protocol);
 				this.clientboundKeepAliveId = getClientboundKeepAliveId(handshake.protocol);

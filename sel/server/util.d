@@ -22,6 +22,8 @@
  */
 module sel.server.util;
 
+import core.atomic : atomicOp;
+
 import std.socket : Address;
 import std.uuid : UUID;
 
@@ -85,6 +87,10 @@ class QueryInfo {
  */
 class Client {
 
+	private static shared uint _id = 0;
+
+	public immutable uint id;
+
 	private Address _address;
 
 	private string _username;
@@ -94,6 +100,7 @@ class Client {
 	protected float _packetLoss = 0;
 
 	this(Address address, string username, UUID uuid) {
+		id = atomicOp!"+="(_id, 1);
 		_address = address;
 		_username = username;
 		_uuid = uuid;

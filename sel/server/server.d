@@ -87,7 +87,7 @@ class Server {
 	/**
 	 * Stops every listener started with the `host` method.
 	 */
-	public abstract void kill(); 
+	public abstract void stop();
 
 }
 
