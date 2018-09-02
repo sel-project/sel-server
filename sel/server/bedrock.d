@@ -14,8 +14,12 @@
  */
 module sel.server.bedrock;
 
+import std.algorithm : sort, all;
+import std.base64 : Base64, Base64Impl, Base64Exception;
 import std.conv : to;
+import std.json : JSONValue, parseJSON, JSON_TYPE, JSONException;
 import std.socket : Address, InternetAddress, AddressFamily;
+import std.string : indexOf, lastIndexOf;
 import std.uuid : UUID;
 import std.zlib : Compress, UnCompress, HeaderFormat, ZlibException;
 
@@ -28,11 +32,15 @@ import sel.raknet.packet : RaknetAddress = Address, UnconnectedPing, Unconnected
 import sel.server.server : GameServer, Handler;
 import sel.server.util : ServerInfo, Client;
 
+import soupply.bedrock : Login, PlayStatus, Disconnect;
+
+import xbuffer : Buffer;
+
 import std.stdio;
 
 class BedrockServer : GameServer {
 
-	private enum __protocols = bedrockProtocols.keys;
+	private enum __protocols = bedrockProtocols.keys.sort.release[7..$]; // since 282 (1.6)
 
 	private static struct Id {
 
@@ -114,6 +122,8 @@ class BedrockServer : GameServer {
 
 		private void delegate(ubyte[]) handleFunction;
 
+		private BedrockClient client;
+
 		this(Id clientId, Address address, RaknetHandler handler) {
 			this.clientId = clientId;
 			this.address = address;
@@ -128,11 +138,10 @@ class BedrockServer : GameServer {
 					case Ping.ID:
 						Ping ping = new Ping();
 						ping.decode(buffer);
-						writeln("PING! ", ping.time);
 						this.raknetHandler.send(new Pong(ping.time).encode());
 						break;
 					case ClientCancelConnection.ID:
-						writeln("CLOSED!");
+						if(client !is null) handler.onLeft(this.client);
 						this.close();
 						break;
 					default:
@@ -144,6 +153,11 @@ class BedrockServer : GameServer {
 
 		void close() {
 			removeClient(this.clientId);
+		}
+		
+		void close(string message) {
+			this.raknetHandler.send(new Disconnect(false, message).encode());
+			this.close();
 		}
 
 		private void handleNothing(ubyte[] buffer) {}
@@ -167,10 +181,9 @@ class BedrockServer : GameServer {
 		}
 
 		private void handleLogin(ubyte[] buffer) {
-			writeln(cast(string)buffer);
 			switch(buffer[0]) {
 				case 254:
-					// 0.15, 1.0, 1.1, 1.2 (container)
+					// 0.15 and newer (container)
 					if(buffer.length > 6) {
 						this.handleFunction = &this.handleNothing; // avoid handling the login more than once
 						if(buffer[1] == 0x78) {
@@ -178,8 +191,12 @@ class BedrockServer : GameServer {
 							// uncompress
 							// do protocol controls
 							// handle non-compressed login body
-							//TODO handle compressed body
-							writeln("NEED TO HANDLE COMPRESSED BODY");
+							auto packets = uncompress(buffer[1..$]);
+							if(packets.length == 1 && packets[0].length && packets[0][0] == Login.ID) {
+								Login login = new Login();
+								login.decode(packets[0]);
+								this.handleLoginPacket(login);
+							}
 							break;
 						} else if(buffer[1] == 1 || buffer[1] == 6) {
 							// login or batch packet (1.0)
@@ -212,10 +229,48 @@ class BedrockServer : GameServer {
 			}
 		}
 
+		private void handleLoginPacket(Login login) {
+			PlayStatus status = new PlayStatus(PlayStatus.OK);
+			if(!protocols.contains(login.protocol)) {
+				// invalid protocol, disconnect
+				if(login.protocol > protocols[$-1]) status.status = PlayStatus.OUTDATED_SERVER;
+				else status.status = PlayStatus.OUTDATED_CLIENT;
+			}
+			this.raknetHandler.send(status.encode());
+			if(status.status == PlayStatus.OK) {
+				// valid protocol, handle JWT
+				bool valid = false;
+				try {
+					JSONValue chainjson = parseJSON(cast(string)login.body_.chain);
+					auto chainptr = "chain" in chainjson;
+					if(chainptr && chainptr.type == JSON_TYPE.ARRAY && chainptr.array.length && chainptr.array.length <= 3 && chainptr.array.all!(a => a.type == JSON_TYPE.STRING)()) {
+						JSONValue chain = parseJWT(chainptr.array[$-1].str);
+						if(chain.type == JSON_TYPE.OBJECT) {
+
+						}
+					}
+				} catch(JSONException) {
+				} catch(Base64Exception) {}
+				if(!valid) {
+					// data was malformed or invalid, blacklist the client
+					//TODO
+				}
+			} else {
+				// send a disconnect packet, just to be sure
+				if(status.status == PlayStatus.OUTDATED_SERVER) this.close("disconnectionScreen.outdatedServer");
+				else this.close("disconnectionScreen.outdatedClient");
+				// connection is also closed
+			}
+		}
+
 		class BedrockClient : Client {
 
-			this(Address address, string username, UUID uuid) {
+			public this(Address address, string username, UUID uuid) {
 				super(address, username, uuid);
+			}
+
+			public override void disconnect(string message) {
+				close(message);
 			}
 
 		}
@@ -230,4 +285,27 @@ static this() {
 	foreach(ref address ; systemAddresses) {
 		address.type = 4;
 	}
+}
+
+private ubyte[][] uncompress(ubyte[] data) {
+	UnCompress uc = new UnCompress();
+	data = cast(ubyte[])uc.uncompress(data);
+	data ~= cast(ubyte[])uc.flush();
+	Buffer buffer = new Buffer(data);
+	ubyte[][] ret;
+	while(buffer.canRead(1)) {
+		ret ~= buffer.read!(ubyte[])(buffer.readVar!uint());
+	}
+	return ret;
+}
+
+private JSONValue parseJWT(string data) {
+	immutable a = data.indexOf(".");
+	if(a != -1) {
+		immutable z = data.lastIndexOf(".");
+		if(a != z) {
+			return parseJSON(cast(string)Base64Impl!('-', '_', Base64.NoPadding).decode(data[a+1..z]));
+		}
+	}
+	return JSONValue.init;
 }

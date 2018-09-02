@@ -237,7 +237,7 @@ class JavaServer : GameServer {
 			private StopWatch stopWatch;
 			private uint keepAliveCount = 1;
 
-			this(string username, UUID uuid) {
+			public this(string username, UUID uuid) {
 				super(stream.conn.remoteAddress, username, uuid);
 				// init constants and functions
 				this.serverboundKeepAliveId = getServerboundKeepAliveId(handshake.protocol);
@@ -245,7 +245,7 @@ class JavaServer : GameServer {
 				this.encodeKeepAlive = getEncodeClientboundKeepAlive(handshake.protocol);
 			}
 
-			void handle(Buffer buffer) {
+			public void handle(Buffer buffer) {
 				if(buffer.peek!varuint() == this.serverboundKeepAliveId) {
 					_latency = this.stopWatch.peek.total!"msecs".to!uint;
 					handler.onLatencyUpdate(this);
@@ -254,7 +254,7 @@ class JavaServer : GameServer {
 				}
 			}
 
-			void tick() {
+			public void tick() {
 				Buffer buffer = new Buffer(9);
 				buffer.write!varuint(this.clientboundKeepAliveId);
 				encodeKeepAlive(buffer, this.keepAliveCount++);
@@ -263,7 +263,7 @@ class JavaServer : GameServer {
 				//this.stopWatch.start();
 			}
 
-			override void disconnect(string message) {
+			public override void disconnect(string message) {
 				//TODO use sel.chat to make json
 				message = `{"text":"` ~ message ~ `"}`;
 				Buffer buffer = new Buffer(message.length + 5);
