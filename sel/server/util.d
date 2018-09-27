@@ -24,6 +24,7 @@ module sel.server.util;
 
 import core.atomic : atomicOp;
 
+import std.json : JSONValue;
 import std.socket : Address;
 import std.uuid : UUID;
 
@@ -87,23 +88,62 @@ class QueryInfo {
  */
 class Client {
 
+	enum Type : ubyte {
+
+		bedrock = 0,
+		java
+
+	}
+
+	enum InputMode : ubyte {
+
+		keyboard,
+		controller,
+		touch
+
+	}
+
 	private static shared uint _id = 0;
 
 	public immutable uint id;
+	public immutable ubyte type;
+	public immutable uint protocol;
 
 	private Address _address;
 
 	private string _username;
 	private UUID _uuid;
+	
+	public immutable string serverIp;
+	public immutable ushort serverPort;
+
+	public immutable string gameName, gameVersion, game;
 
 	protected uint _latency = 0;
 	protected float _packetLoss = 0;
 
-	this(Address address, string username, UUID uuid) {
-		id = atomicOp!"+="(_id, 1);
+	public string skinName;
+	public immutable(ubyte)[] skinData;
+	public string skinGeometryName;
+	public immutable(ubyte)[] skinGeometryData;
+	public immutable(ubyte)[] skinCape;
+	public InputMode inputMode = InputMode.keyboard;
+	public string language;
+	
+	public JSONValue gameData;
+
+	this(ubyte type, uint protocol, Address address, string username, UUID uuid, string serverIp, ushort serverPort, string gameName, string gameVersion) {
+		this.id = atomicOp!"+="(_id, 1);
+		this.type = type;
+		this.protocol = protocol;
 		_address = address;
 		_username = username;
 		_uuid = uuid;
+		this.serverIp = serverIp;
+		this.serverPort = serverPort;
+		this.gameName = gameName;
+		this.gameVersion = gameVersion;
+		this.game = gameName ~ " " ~ gameVersion;
 	}
 
 	/**
@@ -147,9 +187,18 @@ class Client {
 		return _packetLoss;
 	}
 
+	public abstract void send(ubyte[] buffer);
+
+	public abstract void directSend(ubyte[] buffer);
+
 	/**
 	 * Disconnects the client with the given message.
 	 */
 	public abstract void disconnect(string message);
+
+	/**
+	 * Disconnects the client with a translation.
+	 */
+	public abstract void disconnect(string translation, string[] params);
 
 }

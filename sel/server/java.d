@@ -22,7 +22,7 @@
  */
 module sel.server.java;
 
-import std.algorithm : countUntil;
+import std.algorithm : countUntil, all;
 import std.array : join;
 import std.conv : to;
 import std.datetime : seconds;
@@ -213,19 +213,38 @@ class JavaServer : GameServer {
 				new SetCompression(1024).encode(buffer);
 				this.stream.send(buffer);
 				this.stream.modify!(CompressedModifier!varuint)(1024);
-
-				writeln(login);
-				//TODO validate protocol and username
-
-				// after validation
-				this.client = new JavaClient(login.username, randomUUID());
-				new LoginSuccess(client.uuid.toString(), client.username).encode(buffer);
-				this.stream.send(buffer);
-				addJavaClient(this.client);
-				handler.onJoin(this.client);
-				this.stream.onClose = { removeJavaClient(client); handler.onLeft(client); };
-				this.stream.handler = &client.handle;
+				// validate protocol
+				UUID uuid = randomUUID(); //TODO get from auth
+				immutable message = validate(login.username, uuid);
+				if(message.length) {
+					//TODO use sel.chat
+					new Disconnect(`{"translate":"` ~ message ~ `"}`).encode(buffer);
+					this.stream.send(buffer);
+					this.close();
+				} else {
+					// after validation
+					this.client = new JavaClient(login.username, uuid);
+					this.stream.onClose = { removeJavaClient(client); handler.onLeft(client); };
+					new LoginSuccess(client.uuid.toString(), client.username).encode(buffer);
+					this.stream.send(buffer);
+					addJavaClient(this.client);
+					handler.onJoin(this.client);
+					this.stream.handler = &client.handle;
+				}
 			}
+		}
+
+		private string validate(string username, UUID uuid) {
+			// validate protocol
+			if(!protocols.contains(this.handshake.protocol)) {
+				if(protocols[$-1] < this.handshake.protocol) return "multiplayer.status.server_out_of_date";
+				else return "multiplayer.status.client_out_of_date";
+			}
+			// validate username
+			if(username.length < 3 || username.length > 16 || !username.all!(a => a >= '0' && a <= '9' || a >= 'A' && a <= 'Z' || a >= 'a' && a <= 'z' || a == '_')) {
+				return "Invalid username!";
+			}
+			return "";
 		}
 
 		class JavaClient : Client {
@@ -238,7 +257,7 @@ class JavaServer : GameServer {
 			private uint keepAliveCount = 1;
 
 			public this(string username, UUID uuid) {
-				super(stream.conn.remoteAddress, username, uuid);
+				super(Type.java, handshake.protocol, stream.conn.remoteAddress, username, uuid, handshake.serverAddress, handshake.serverPort, "Minecraft: Java Edition", javaProtocols[handshake.protocol][0]);
 				// init constants and functions
 				this.serverboundKeepAliveId = getServerboundKeepAliveId(handshake.protocol);
 				this.clientboundKeepAliveId = getClientboundKeepAliveId(handshake.protocol);
@@ -263,9 +282,28 @@ class JavaServer : GameServer {
 				//this.stopWatch.start();
 			}
 
+			public override void send(ubyte[] buffer) {
+				stream.send(buffer); //TODO do compression in another thread
+			}
+
+			public override void directSend(ubyte[] buffer) {
+				stream.conn.write(buffer);
+			}
+
 			public override void disconnect(string message) {
 				//TODO use sel.chat to make json
 				message = `{"text":"` ~ message ~ `"}`;
+				Buffer buffer = new Buffer(message.length + 5);
+				encodeClientboundDisconnect(buffer, handshake.protocol, message);
+				stream.send(buffer);
+			}
+
+			public override void disconnect(string translation, string[] params) {
+				//TODO use sel.chat to make json
+				JSONValue[string] json;
+				json["translate"] = translation;
+				json["with"] = params;
+				immutable message = JSONValue(json).toString();
 				Buffer buffer = new Buffer(message.length + 5);
 				encodeClientboundDisconnect(buffer, handshake.protocol, message);
 				stream.send(buffer);

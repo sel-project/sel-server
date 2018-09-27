@@ -6,3 +6,4 @@
 *.lst
 app.d
 sel-server
+*.a

@@ -265,12 +265,16 @@ class BedrockServer : GameServer {
 
 		class BedrockClient : Client {
 
-			public this(Address address, string username, UUID uuid) {
-				super(address, username, uuid);
+			public this(uint protocol, Address address, string username, UUID uuid) {
+				super(Type.bedrock, protocol, address, username, uuid, "", 0, "Minecraft", bedrockProtocols[protocol][0]);
 			}
 
 			public override void disconnect(string message) {
 				close(message);
+			}
+
+			public override void disconnect(string translation, string[] params) {
+				close(translation);
 			}
 
 		}
