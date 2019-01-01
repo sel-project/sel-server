@@ -13,7 +13,7 @@
  * 
  */
 /**
- * Copyright: 2017-2018 sel-project
+ * Copyright: 2017-2019 sel-project
  * License: LGPL-3.0
  * Authors: Kripth
  * Source: $(HTTP github.com/sel-project/sel-server/sel/server/client.d, sel/server/client.d)
